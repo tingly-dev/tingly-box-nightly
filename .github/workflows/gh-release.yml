@@ -469,7 +469,6 @@ jobs:
             --ref main \
             -f upstream_ref="${{ needs.setup.outputs.upstream_ref }}" \
             -f release_tag="${{ needs.setup.outputs.release_tag }}" \
-            -f force_publish=true \
             -f publish_cli=true \
             -f publish_gui=false \
             -f publish_bundle=false
