@@ -58,14 +58,23 @@ jobs:
           # Get short commit hash
           COMMIT_HASH=$(git rev-parse --short=8 HEAD)
           echo "commit=$COMMIT_HASH" >> $GITHUB_OUTPUT
+          echo "Debug: COMMIT_HASH=$COMMIT_HASH"
 
           # Generate version: 0.YYYYMMDD.HHmm-nightly+<commit>
           NIGHTLY_DATE=$(date -u '+%Y%m%d')
           NIGHTLY_TIME=$(date -u '+%H%M')
           VERSION="0.${NIGHTLY_DATE}.${NIGHTLY_TIME}-nightly+${COMMIT_HASH}"
 
-          echo "release_tag=$VERSION" >> $GITHUB_OUTPUT
+          # Use heredoc to safely set output with special characters
+          {
+            echo "release_tag<<EOF"
+            echo "$VERSION"
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
+
           echo "Generated version: $VERSION"
+          echo "Debug: Set output release_tag=$VERSION"
+          echo "Debug: GITHUB_OUTPUT file: $GITHUB_OUTPUT"
 
   build-cli:
     needs: setup
@@ -342,6 +351,18 @@ jobs:
       - name: Set up tag environment
         run: |
           RELEASE_TAG="${{ needs.setup.outputs.release_tag }}"
+          echo "Debug: release_tag from setup = '$RELEASE_TAG'"
+          echo "Debug: all setup outputs:"
+          echo "  upstream_ref = '${{ needs.setup.outputs.upstream_ref }}'"
+          echo "  build_gui = '${{ needs.setup.outputs.build_gui }}'"
+          echo "  tingly_box_commit = '${{ needs.setup.outputs.tingly_box_commit }}'"
+
+          if [ -z "$RELEASE_TAG" ]; then
+            echo "Error: release_tag is empty!"
+            echo "Error: needs.setup.outputs.release_tag is empty or not set"
+            exit 1
+          fi
+
           echo "RELEASE_TAG=$RELEASE_TAG" >> $GITHUB_ENV
           # Mark as prerelease for nightly builds
           if [[ "$RELEASE_TAG" == *-nightly* ]]; then
@@ -353,7 +374,7 @@ jobs:
 
       - name: Create git tag for nightly release
         run: |
-          RELEASE_TAG="${{ env.RELEASE_TAG }}"
+          RELEASE_TAG="${{ needs.setup.outputs.release_tag }}"
           # Check if tag already exists
           if git rev-parse "$RELEASE_TAG" >/dev/null 2>&1; then
             echo "Tag $RELEASE_TAG already exists, skipping..."
@@ -412,19 +433,19 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ env.RELEASE_TAG }}
+          tag_name: "${{ needs.setup.outputs.release_tag }}"
           files: |
             release/*.zip
             release/checksums.txt
           generate_release_notes: true
           draft: false
-          prerelease: ${{ env.IS_PRERELEASE }}
+          prerelease: true
           body: |
             ## Nightly Release
 
             Built from tingly-dev/tingly-box@${{ needs.setup.outputs.upstream_ref }} (commit: ${{ needs.setup.outputs.tingly_box_commit }})
 
-            Version: ${{ env.RELEASE_TAG }}
+            Version: "${{ needs.setup.outputs.release_tag }}"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
