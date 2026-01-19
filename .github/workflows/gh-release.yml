@@ -327,22 +327,40 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Checkout tingly-box source code
+      - name: Checkout tingly-box-nightly repository
         uses: actions/checkout@v4
         with:
-          repository: tingly-dev/tingly-box
-          ref: ${{ needs.setup.outputs.upstream_ref }}
+          repository: tingly-dev/tingly-box-nightly
+          ref: main
           fetch-depth: 0
-          submodules: true
+
+      - name: Configure Git
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
 
       - name: Set up tag environment
         run: |
-          echo "RELEASE_TAG=${{ needs.setup.outputs.release_tag }}" >> $GITHUB_ENV
+          RELEASE_TAG="${{ needs.setup.outputs.release_tag }}"
+          echo "RELEASE_TAG=$RELEASE_TAG" >> $GITHUB_ENV
           # Mark as prerelease for nightly builds
-          if [[ "${{ needs.setup.outputs.release_tag }}" == nightly-* ]]; then
+          if [[ "$RELEASE_TAG" == *-nightly* ]]; then
             echo "IS_PRERELEASE=true" >> $GITHUB_ENV
           else
             echo "IS_PRERELEASE=false" >> $GITHUB_ENV
+          fi
+          echo "Release tag: $RELEASE_TAG"
+
+      - name: Create git tag for nightly release
+        run: |
+          RELEASE_TAG="${{ env.RELEASE_TAG }}"
+          # Check if tag already exists
+          if git rev-parse "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "Tag $RELEASE_TAG already exists, skipping..."
+          else
+            echo "Creating tag: $RELEASE_TAG"
+            git tag "$RELEASE_TAG"
+            git push origin "$RELEASE_TAG"
           fi
 
       - name: Download CLI artifacts
@@ -401,6 +419,12 @@ jobs:
           generate_release_notes: true
           draft: false
           prerelease: ${{ env.IS_PRERELEASE }}
+          body: |
+            ## Nightly Release
+
+            Built from tingly-dev/tingly-box@${{ needs.setup.outputs.upstream_ref }} (commit: ${{ needs.setup.outputs.tingly_box_commit }})
+
+            Version: ${{ env.RELEASE_TAG }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
