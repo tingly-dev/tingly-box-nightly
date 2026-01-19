@@ -27,7 +27,7 @@ jobs:
     outputs:
       upstream_ref: ${{ steps.set_vars.outputs.upstream_ref }}
       build_gui: ${{ steps.set_vars.outputs.build_gui }}
-      release_tag: ${{ steps.set_vars.outputs.release_tag }}
+      release_tag: ${{ steps.get_commit.outputs.release_tag }}
       tingly_box_commit: ${{ steps.get_commit.outputs.commit }}
     steps:
       - name: Set variables
