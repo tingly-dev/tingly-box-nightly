@@ -11,11 +11,6 @@ on:
         required: false
         type: string
         default: 'main'
-      release_tag:
-        description: 'Release tag (e.g., nightly-20250119 or v1.0.0)'
-        required: false
-        type: string
-        default: 'auto'
       build_gui:
         description: 'Build GUI version'
         required: false
@@ -33,37 +28,44 @@ jobs:
       upstream_ref: ${{ steps.set_vars.outputs.upstream_ref }}
       build_gui: ${{ steps.set_vars.outputs.build_gui }}
       release_tag: ${{ steps.set_vars.outputs.release_tag }}
+      tingly_box_commit: ${{ steps.get_commit.outputs.commit }}
     steps:
       - name: Set variables
         id: set_vars
         shell: bash
         run: |
           if [ "${{ github.event_name }}" == "schedule" ]; then
-            # Scheduled nightly build - use main branch and generate nightly tag
-            NIGHTLY_DATE=$(date -u '+%Y%m%d')
             echo "upstream_ref=main" >> $GITHUB_OUTPUT
-            echo "release_tag=nightly-${NIGHTLY_DATE}" >> $GITHUB_OUTPUT
             echo "build_gui=false" >> $GITHUB_OUTPUT
           elif [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
-            # Manual trigger
-            UPSTREAM_REF="${{ github.event.inputs.upstream_ref }}"
-            RELEASE_TAG="${{ github.event.inputs.release_tag }}"
-
-            # Generate nightly tag if 'auto'
-            if [ "$RELEASE_TAG" == "auto" ]; then
-              NIGHTLY_DATE=$(date -u '+%Y%m%d')
-              RELEASE_TAG="nightly-${NIGHTLY_DATE}"
-            fi
-
-            echo "upstream_ref=${UPSTREAM_REF}" >> $GITHUB_OUTPUT
-            echo "release_tag=${RELEASE_TAG}" >> $GITHUB_OUTPUT
+            echo "upstream_ref=${{ github.event.inputs.upstream_ref }}" >> $GITHUB_OUTPUT
             echo "build_gui=${{ github.event.inputs.build_gui }}" >> $GITHUB_OUTPUT
           else
-            # Fallback
             echo "upstream_ref=main" >> $GITHUB_OUTPUT
-            echo "release_tag=nightly-$(date -u '+%Y%m%d')" >> $GITHUB_OUTPUT
             echo "build_gui=false" >> $GITHUB_OUTPUT
           fi
+
+      - name: Checkout tingly-box to get commit hash
+        uses: actions/checkout@v4
+        with:
+          repository: tingly-dev/tingly-box
+          ref: ${{ steps.set_vars.outputs.upstream_ref }}
+          fetch-depth: 1
+
+      - name: Get commit hash and generate version
+        id: get_commit
+        run: |
+          # Get short commit hash
+          COMMIT_HASH=$(git rev-parse --short=8 HEAD)
+          echo "commit=$COMMIT_HASH" >> $GITHUB_OUTPUT
+
+          # Generate version: 0.YYYYMMDD.HHmm-nightly+<commit>
+          NIGHTLY_DATE=$(date -u '+%Y%m%d')
+          NIGHTLY_TIME=$(date -u '+%H%M')
+          VERSION="0.${NIGHTLY_DATE}.${NIGHTLY_TIME}-nightly+${COMMIT_HASH}"
+
+          echo "release_tag=$VERSION" >> $GITHUB_OUTPUT
+          echo "Generated version: $VERSION"
 
   build-cli:
     needs: setup
@@ -411,22 +413,7 @@ jobs:
       needs.github-release.result == 'success'
     permissions:
       contents: write
-    outputs:
-      npx_version: ${{ steps.extract_version.outputs.npx_version }}
     steps:
-      - name: Extract version from release tag
-        id: extract_version
-        run: |
-          RELEASE_TAG="${{ needs.setup.outputs.release_tag }}"
-          # Remove 'v' prefix if present, or use nightly date directly
-          if [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+ ]]; then
-            NPX_VERSION="${RELEASE_TAG#v}"
-          else
-            NPX_VERSION="$RELEASE_TAG"
-          fi
-          echo "npx_version=$NPX_VERSION" >> $GITHUB_OUTPUT
-          echo "NPX version: $NPX_VERSION"
-
       - name: Trigger NPX Publish workflow
         uses: actions/github-script@v7
         with:
@@ -439,7 +426,6 @@ jobs:
               inputs: {
                 upstream_ref: '${{ needs.setup.outputs.upstream_ref }}',
                 release_tag: '${{ needs.setup.outputs.release_tag }}',
-                version_override: '${{ steps.extract_version.outputs.npx_version }}',
                 force_publish: 'true',
                 publish_cli: 'true',
                 publish_gui: 'false',
