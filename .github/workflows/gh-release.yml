@@ -401,3 +401,50 @@ jobs:
           prerelease: ${{ env.IS_PRERELEASE }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  trigger-npx-publish:
+    needs: [setup, github-release]
+    runs-on: ubuntu-latest
+    if: |
+      always() &&
+      needs.setup.result == 'success' &&
+      needs.github-release.result == 'success'
+    permissions:
+      contents: write
+    outputs:
+      npx_version: ${{ steps.extract_version.outputs.npx_version }}
+    steps:
+      - name: Extract version from release tag
+        id: extract_version
+        run: |
+          RELEASE_TAG="${{ needs.setup.outputs.release_tag }}"
+          # Remove 'v' prefix if present, or use nightly date directly
+          if [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+ ]]; then
+            NPX_VERSION="${RELEASE_TAG#v}"
+          else
+            NPX_VERSION="$RELEASE_TAG"
+          fi
+          echo "npx_version=$NPX_VERSION" >> $GITHUB_OUTPUT
+          echo "NPX version: $NPX_VERSION"
+
+      - name: Trigger NPX Publish workflow
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.actions.createWorkflowDispatch({
+              owner: 'tingly-dev',
+              repo: 'tingly-box-nightly',
+              workflow_id: 'gh-npx-publish.yml',
+              ref: 'main',
+              inputs: {
+                upstream_ref: '${{ needs.setup.outputs.upstream_ref }}',
+                release_tag: '${{ needs.setup.outputs.release_tag }}',
+                version_override: '${{ steps.extract_version.outputs.npx_version }}',
+                force_publish: 'true',
+                publish_cli: 'true',
+                publish_gui: 'false',
+                publish_bundle: 'false'
+              }
+            });
+
+
