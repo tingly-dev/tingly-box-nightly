@@ -86,19 +86,19 @@ jobs:
             goarch: amd64
             suffix: linux-amd64
             runs-on: ubuntu-latest
-        #   - goos: darwin
-        #     goarch: amd64
-        #     suffix: macos-amd64
-        #     runs-on: macos-15-intel
-        #   - goos: darwin
-        #     goarch: arm64
-        #     suffix: macos-arm64
-        #     runs-on: macos-latest
-        #   - goos: windows
-        #     goarch: amd64
-        #     suffix: windows-amd64
-        #     exe: .exe
-        #     runs-on: windows-latest
+          - goos: darwin
+            goarch: amd64
+            suffix: macos-amd64
+            runs-on: macos-15-intel
+          - goos: darwin
+            goarch: arm64
+            suffix: macos-arm64
+            runs-on: macos-latest
+          - goos: windows
+            goarch: amd64
+            suffix: windows-amd64
+            exe: .exe
+            runs-on: windows-latest
     steps:
       - name: Checkout tingly-box source code
         uses: actions/checkout@v4
