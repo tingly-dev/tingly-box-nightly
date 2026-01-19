@@ -12,10 +12,9 @@ on:
         type: string
         default: 'main'
       release_tag:
-        description: 'Release tag (e.g., nightly-20250119 or v1.0.0)'
-        required: false
+        description: 'Release tag (auto-generated format: 0.YYYYMMDD.HHmm-nightly+commit)'
+        required: true
         type: string
-        default: 'auto'
 
 env:
   REGISTRY: ghcr.io
@@ -34,39 +33,41 @@ jobs:
         with:
           repository: tingly-dev/tingly-box
           ref: ${{ github.event.inputs.upstream_ref || 'main' }}
+          fetch-depth: 1
 
-      - name: Determine version tag
+      - name: Get commit hash and determine version
         id: version
         run: |
           if [ "${{ github.event_name }}" == "schedule" ]; then
-            # Scheduled nightly build
+            # Scheduled nightly build - get commit hash and generate version
+            COMMIT_HASH=$(git rev-parse --short=8 HEAD)
             NIGHTLY_DATE=$(date -u '+%Y%m%d')
-            TAG="nightly-${NIGHTLY_DATE}"
-            NPM_VERSION="nightly-${NIGHTLY_DATE}"
+            NIGHTLY_TIME=$(date -u '+%H%M')
+            TAG="0.${NIGHTLY_DATE}.${NIGHTLY_TIME}-nightly+${COMMIT_HASH}"
+            NPM_VERSION="$TAG"
+            echo "is_nightly=true" >> $GITHUB_OUTPUT
           elif [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
-            UPSTREAM_REF="${{ github.event.inputs.upstream_ref }}"
-            INPUT_TAG="${{ github.event.inputs.release_tag }}"
-
-            # Generate nightly tag if 'auto'
-            if [ "$INPUT_TAG" == "auto" ]; then
-              NIGHTLY_DATE=$(date -u '+%Y%m%d')
-              TAG="nightly-${NIGHTLY_DATE}"
+            # Use provided release_tag directly (already in new format)
+            TAG="${{ github.event.inputs.release_tag }}"
+            NPM_VERSION="$TAG"
+            # Check if it's a nightly build
+            if [[ "$TAG" == *-nightly* ]]; then
+              echo "is_nightly=true" >> $GITHUB_OUTPUT
             else
-              TAG="$INPUT_TAG"
+              echo "is_nightly=false" >> $GITHUB_OUTPUT
             fi
-
-            # Use upstream_ref or tag as npm version
-            NPM_VERSION="${TAG#v}"
           else
-            # Fallback
+            # Fallback - generate version with commit hash
+            COMMIT_HASH=$(git rev-parse --short=8 HEAD)
             NIGHTLY_DATE=$(date -u '+%Y%m%d')
-            TAG="nightly-${NIGHTLY_DATE}"
-            NPM_VERSION="nightly-${NIGHTLY_DATE}"
+            NIGHTLY_TIME=$(date -u '+%H%M')
+            TAG="0.${NIGHTLY_DATE}.${NIGHTLY_TIME}-nightly+${COMMIT_HASH}"
+            NPM_VERSION="$TAG"
+            echo "is_nightly=true" >> $GITHUB_OUTPUT
           fi
 
           echo "tag=$TAG" >> $GITHUB_OUTPUT
           echo "npm_version=$NPM_VERSION" >> $GITHUB_OUTPUT
-          echo "is_nightly=$([[ "$TAG" == nightly-* ]] && echo 'true' || echo 'false')" >> $GITHUB_OUTPUT
           echo "Building image for tag: $TAG (npm version: $NPM_VERSION)"
 
       - name: Set up Docker Buildx

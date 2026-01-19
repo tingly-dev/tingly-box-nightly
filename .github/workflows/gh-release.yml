@@ -86,19 +86,19 @@ jobs:
             goarch: amd64
             suffix: linux-amd64
             runs-on: ubuntu-latest
-          - goos: darwin
-            goarch: amd64
-            suffix: macos-amd64
-            runs-on: macos-15-intel
-          - goos: darwin
-            goarch: arm64
-            suffix: macos-arm64
-            runs-on: macos-latest
-          - goos: windows
-            goarch: amd64
-            suffix: windows-amd64
-            exe: .exe
-            runs-on: windows-latest
+        #   - goos: darwin
+        #     goarch: amd64
+        #     suffix: macos-amd64
+        #     runs-on: macos-15-intel
+        #   - goos: darwin
+        #     goarch: arm64
+        #     suffix: macos-arm64
+        #     runs-on: macos-latest
+        #   - goos: windows
+        #     goarch: amd64
+        #     suffix: windows-amd64
+        #     exe: .exe
+        #     runs-on: windows-latest
     steps:
       - name: Checkout tingly-box source code
         uses: actions/checkout@v4
@@ -458,24 +458,21 @@ jobs:
       needs.github-release.result == 'success'
     permissions:
       contents: write
+      actions: write
     steps:
       - name: Trigger NPX Publish workflow
-        uses: actions/github-script@v7
-        with:
-          script: |
-            await github.rest.actions.createWorkflowDispatch({
-              owner: 'tingly-dev',
-              repo: 'tingly-box-nightly',
-              workflow_id: 'gh-npx-publish.yml',
-              ref: 'main',
-              inputs: {
-                upstream_ref: '${{ needs.setup.outputs.upstream_ref }}',
-                release_tag: '${{ needs.setup.outputs.release_tag }}',
-                force_publish: 'true',
-                publish_cli: 'true',
-                publish_gui: 'false',
-                publish_bundle: 'false'
-              }
-            });
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh workflow run gh-npx-publish.yml \
+            --repo tingly-dev/tingly-box-nightly \
+            --ref main \
+            -f upstream_ref="${{ needs.setup.outputs.upstream_ref }}" \
+            -f release_tag="${{ needs.setup.outputs.release_tag }}" \
+            -f force_publish=true \
+            -f publish_cli=true \
+            -f publish_gui=false \
+            -f publish_bundle=false
+          echo "Triggered gh-npx-publish workflow"
 
 
