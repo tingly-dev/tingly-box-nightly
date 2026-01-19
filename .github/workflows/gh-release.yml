@@ -1,19 +1,21 @@
 name: Github Release
 
 on:
-  push:
-    tags:
-      - 'v*'
-    branches:
-      - 'ci/**'
-      - 'main'
+  schedule:
+    # Run daily at 00:00 UTC for nightly builds
+    - cron: '0 0 * * *'
   workflow_dispatch:
     inputs:
-      release_tag:
-        description: 'Release tag (e.g., v1.0.0)'
-        required: true
+      upstream_ref:
+        description: 'Tingly-Box ref to build (commit, branch, or tag, e.g., main, v1.0.0, abc123)'
+        required: false
         type: string
-        default: 'v1.0.0'
+        default: 'main'
+      release_tag:
+        description: 'Release tag (e.g., nightly-20250119 or v1.0.0)'
+        required: false
+        type: string
+        default: 'auto'
       build_gui:
         description: 'Build GUI version'
         required: false
@@ -28,30 +30,39 @@ jobs:
   setup:
     runs-on: ubuntu-latest
     outputs:
+      upstream_ref: ${{ steps.set_vars.outputs.upstream_ref }}
       build_gui: ${{ steps.set_vars.outputs.build_gui }}
       release_tag: ${{ steps.set_vars.outputs.release_tag }}
     steps:
-      - name: Checkout tingly-box source code
-        uses: actions/checkout@v4
-        with:
-          repository: tingly-dev/tingly-box
-          fetch-depth: 0
-          submodules: true
-
       - name: Set variables
         id: set_vars
         shell: bash
         run: |
-          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
-            echo "release_tag=${{ github.event.inputs.release_tag }}" >> $GITHUB_OUTPUT
+          if [ "${{ github.event_name }}" == "schedule" ]; then
+            # Scheduled nightly build - use main branch and generate nightly tag
+            NIGHTLY_DATE=$(date -u '+%Y%m%d')
+            echo "upstream_ref=main" >> $GITHUB_OUTPUT
+            echo "release_tag=nightly-${NIGHTLY_DATE}" >> $GITHUB_OUTPUT
+            echo "build_gui=false" >> $GITHUB_OUTPUT
+          elif [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            # Manual trigger
+            UPSTREAM_REF="${{ github.event.inputs.upstream_ref }}"
+            RELEASE_TAG="${{ github.event.inputs.release_tag }}"
+
+            # Generate nightly tag if 'auto'
+            if [ "$RELEASE_TAG" == "auto" ]; then
+              NIGHTLY_DATE=$(date -u '+%Y%m%d')
+              RELEASE_TAG="nightly-${NIGHTLY_DATE}"
+            fi
+
+            echo "upstream_ref=${UPSTREAM_REF}" >> $GITHUB_OUTPUT
+            echo "release_tag=${RELEASE_TAG}" >> $GITHUB_OUTPUT
             echo "build_gui=${{ github.event.inputs.build_gui }}" >> $GITHUB_OUTPUT
-          elif [[ "${GITHUB_REF}" == refs/tags/* ]]; then
-            echo "release_tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
-            echo "build_gui=true" >> $GITHUB_OUTPUT
           else
-            # CI push to branch - use a dev version
-            echo "release_tag=dev-${GITHUB_SHA:0:7}" >> $GITHUB_OUTPUT
-            echo "build_gui=true" >> $GITHUB_OUTPUT
+            # Fallback
+            echo "upstream_ref=main" >> $GITHUB_OUTPUT
+            echo "release_tag=nightly-$(date -u '+%Y%m%d')" >> $GITHUB_OUTPUT
+            echo "build_gui=false" >> $GITHUB_OUTPUT
           fi
 
   build-cli:
@@ -82,23 +93,15 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: tingly-dev/tingly-box
+          ref: ${{ needs.setup.outputs.upstream_ref }}
           fetch-depth: 0
           submodules: true
 
       - name: Set up tag environment
         shell: bash
         run: |
-          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
-            echo "RELEASE_TAG=${{ github.event.inputs.release_tag }}" >> $GITHUB_ENV
-            echo "TAG_EXISTS=$(git tag -l "${{ github.event.inputs.release_tag }}" | wc -l)" >> $GITHUB_ENV
-          elif [[ "${GITHUB_REF}" == refs/tags/* ]]; then
-            echo "RELEASE_TAG=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
-            echo "TAG_EXISTS=1" >> $GITHUB_ENV
-          else
-            # CI push to branch
-            echo "RELEASE_TAG=${{ needs.setup.outputs.release_tag }}" >> $GITHUB_ENV
-            echo "TAG_EXISTS=0" >> $GITHUB_ENV
-          fi
+          echo "RELEASE_TAG=${{ needs.setup.outputs.release_tag }}" >> $GITHUB_ENV
+          echo "TAG_EXISTS=0" >> $GITHUB_ENV
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -204,23 +207,15 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: tingly-dev/tingly-box
+          ref: ${{ needs.setup.outputs.upstream_ref }}
           fetch-depth: 0
           submodules: true
 
       - name: Set up tag environment
         shell: bash
         run: |
-          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
-            echo "RELEASE_TAG=${{ github.event.inputs.release_tag }}" >> $GITHUB_ENV
-            echo "TAG_EXISTS=$(git tag -l "${{ github.event.inputs.release_tag }}" | wc -l)" >> $GITHUB_ENV
-          elif [[ "${GITHUB_REF}" == refs/tags/* ]]; then
-            echo "RELEASE_TAG=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
-            echo "TAG_EXISTS=1" >> $GITHUB_ENV
-          else
-            # CI push to branch
-            echo "RELEASE_TAG=${{ needs.setup.outputs.release_tag }}" >> $GITHUB_ENV
-            echo "TAG_EXISTS=0" >> $GITHUB_ENV
-          fi
+          echo "RELEASE_TAG=${{ needs.setup.outputs.release_tag }}" >> $GITHUB_ENV
+          echo "TAG_EXISTS=0" >> $GITHUB_ENV
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -323,7 +318,7 @@ jobs:
     runs-on: ubuntu-latest
     if: |
       always() &&
-      (startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch') &&
+      github.event_name == 'workflow_dispatch' &&
       needs.build-cli.result == 'success' &&
       needs.setup.result == 'success' &&
       (needs.build-gui.result == 'success' || needs.build-gui.result == 'skipped')
@@ -334,12 +329,19 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: tingly-dev/tingly-box
+          ref: ${{ needs.setup.outputs.upstream_ref }}
           fetch-depth: 0
           submodules: true
 
       - name: Set up tag environment
         run: |
           echo "RELEASE_TAG=${{ needs.setup.outputs.release_tag }}" >> $GITHUB_ENV
+          # Mark as prerelease for nightly builds
+          if [[ "${{ needs.setup.outputs.release_tag }}" == nightly-* ]]; then
+            echo "IS_PRERELEASE=true" >> $GITHUB_ENV
+          else
+            echo "IS_PRERELEASE=false" >> $GITHUB_ENV
+          fi
 
       - name: Download CLI artifacts
         uses: actions/download-artifact@v4
@@ -396,6 +398,6 @@ jobs:
             release/checksums.txt
           generate_release_notes: true
           draft: false
-          prerelease: false
+          prerelease: ${{ env.IS_PRERELEASE }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
