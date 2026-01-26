@@ -408,8 +408,20 @@ jobs:
             chmod +x tingly-box-* || true
 
             # Package all CLI binaries as zip
+            # Binary inside ZIP is named "tingly-box" (no platform suffix)
             for binary in tingly-box-*; do
-              zip "../../release/${binary%.exe}.zip" "$binary"
+              zip_name="../../release/${binary%.exe}.zip"
+
+              # Create temp dir with renamed binary
+              tmp_dir=$(mktemp -d)
+              if [[ "$binary" == *.exe ]]; then
+                cp "$binary" "$tmp_dir/tingly-box.exe"
+                (cd "$tmp_dir" && zip -q - tingly-box.exe) > "$zip_name"
+              else
+                cp "$binary" "$tmp_dir/tingly-box"
+                (cd "$tmp_dir" && zip -q - tingly-box) > "$zip_name"
+              fi
+              rm -rf "$tmp_dir"
             done
             cd ../..
           fi
