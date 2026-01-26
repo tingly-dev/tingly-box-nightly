@@ -8,10 +8,10 @@ import { ProxyAgent } from "undici";
 import unzipper from "unzipper";
 
 // Configuration for binary downloads
-const BASE_URL = "https://github.com/tingly-dev/tingly-box/releases/download/";
+const BASE_URL = "https://github.com/tingly-dev/tingly-box-nightly/releases/download/";
 
 // GitHub API endpoint for getting latest release info
-const LATEST_RELEASE_API_URL = "https://github.com/tingly-dev/tingly-box/releases/download/";
+const LATEST_RELEASE_API_URL = "https://github.com/tingly-dev/tingly-box-nightly/releases/download/";
 
 // Default branch to use when not specified via transport version
 // This will be replaced during the NPX build process
@@ -180,7 +180,7 @@ async function downloadBinary(url, dest) {
 }
 
 async function downloadAndExtractZip(url, extractDir, binaryName) {
-	console.log(`🔄 Downloading ZIP from ${url}...`);
+	console.log(`🔄 Downloading ZIP from ${url} ...`);
 
 	// Fetch with redirect following and optional proxy support
 	const fetchOptions = {
@@ -341,9 +341,9 @@ function formatBytes(bytes) {
 	// For the NPX package, we always use the configured branch or the specified version
 	const branchName = VERSION === "latest" ? BINARY_RELEASE_BRANCH : VERSION;
 
-	// Build ZIP download URL
+	// Build ZIP download URL (encode branchName for special characters like +)
 	const zipFileName = `${binaryName}-${platformDir}-${archDir}.zip`;
-	const downloadUrl = `${BASE_URL}/${branchName}/${zipFileName}`;
+	const downloadUrl = `${BASE_URL}/${encodeURIComponent(branchName)}/${zipFileName}`;
 
 	let lastError = null;
 	let binaryWorking = false;
