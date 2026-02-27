@@ -1,5 +1,4 @@
-name: Github Release
-
+name: Nightly Build and Release
 on:
   schedule:
     # Run daily at 00:00 UTC for nightly builds
