@@ -1,0 +1,324 @@
+name: Dev Build and NPX Publish
+
+on:
+  workflow_dispatch:
+    inputs:
+      upstream_ref:
+        description: 'Tingly-Box ref to build (commit, branch, or tag, e.g., main, v1.0.0, abc123)'
+        required: false
+        type: string
+        default: 'main'
+
+env:
+  GO_VERSION: '1.25'
+  NODE_VERSION: '20'
+
+jobs:
+  setup:
+    runs-on: ubuntu-latest
+    outputs:
+      upstream_ref: ${{ steps.set_vars.outputs.upstream_ref }}
+      release_tag: ${{ steps.get_commit.outputs.release_tag }}
+      tingly_box_commit: ${{ steps.get_commit.outputs.commit }}
+    steps:
+      - name: Set variables
+        id: set_vars
+        shell: bash
+        run: |
+          echo "upstream_ref=${{ github.event.inputs.upstream_ref }}" >> $GITHUB_OUTPUT
+
+      - name: Checkout tingly-box to get commit hash
+        uses: actions/checkout@v4
+        with:
+          repository: tingly-dev/tingly-box
+          ref: ${{ steps.set_vars.outputs.upstream_ref }}
+          fetch-depth: 1
+
+      - name: Get commit hash
+        id: get_commit
+        run: |
+          # Get short commit hash
+          COMMIT_HASH=$(git rev-parse --short=8 HEAD)
+          echo "commit=$COMMIT_HASH" >> $GITHUB_OUTPUT
+
+          # Dev builds use fixed "dev" tag
+          echo "release_tag=dev" >> $GITHUB_OUTPUT
+          echo "Dev build with commit: $COMMIT_HASH"
+
+  build-cli:
+    needs: setup
+    runs-on: ${{ matrix.runs-on }}
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            suffix: linux-amd64
+            runs-on: ubuntu-latest
+          - goos: darwin
+            goarch: arm64
+            suffix: macos-arm64
+            runs-on: macos-latest
+          - goos: windows
+            goarch: amd64
+            suffix: windows-amd64
+            exe: .exe
+            runs-on: windows-latest
+    steps:
+      - name: Checkout tingly-box source code
+        uses: actions/checkout@v4
+        with:
+          repository: tingly-dev/tingly-box
+          ref: ${{ needs.setup.outputs.upstream_ref }}
+          fetch-depth: 0
+          submodules: true
+
+      - name: Set up tag environment
+        shell: bash
+        run: |
+          echo "RELEASE_TAG=${{ needs.setup.outputs.release_tag }}" >> $GITHUB_ENV
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ matrix.goarch }}-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-${{ matrix.goarch }}-
+            ${{ runner.os }}-go-
+
+      - name: Cache pnpm modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.pnpm-store
+            frontend/node_modules
+          key: ${{ runner.os }}-pnpm-${{ matrix.goarch }}-${{ hashFiles('frontend/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-${{ matrix.goarch }}-
+            ${{ runner.os }}-pnpm-
+
+      - name: Install pnpm
+        run: npm install -g pnpm
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+        working-directory: ./frontend
+
+      - name: Install openapi-generator-cli
+        run: npm install -g @openapitools/openapi-generator-cli
+
+      - name: Run codegen Build frontend
+        shell: bash
+        run: |
+          openapi-generator-cli generate -g typescript-axios -i ../swagger.json -o ./src/client
+          pnpm build && mkdir -p ../internal/web/dist && cp -R dist/* ../internal/web/dist/
+        working-directory: ./frontend
+
+      - name: Build Go binary (${{ matrix.suffix }})
+        shell: bash
+        run: |
+          # Create build directory
+          mkdir -p dist
+
+          # Get build info
+          VERSION="${{ env.RELEASE_TAG }}"
+          GIT_COMMIT="$(git rev-parse HEAD 2>/dev/null || echo 'unknown')"
+          BUILD_TIME="$(date -u '+%Y-%m-%d-%H-%M-%S' 2>/dev/null || echo 'unknown')"
+          GO_VERSION="$(go version | awk '{print $3}' | sed 's/go//' 2>/dev/null || echo 'unknown')"
+          PLATFORM="${{ matrix.goos }}/${{ matrix.goarch }}"
+
+          # Build with ldflags
+          LDFLAGS="-s -w -X main.version=${VERSION} -X main.gitCommit=${GIT_COMMIT} -X main.buildTime=${BUILD_TIME} -X main.goVersion=${GO_VERSION} -X main.platform=${PLATFORM}"
+
+          CGO_ENABLED=1 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build \
+            -ldflags="${LDFLAGS}" \
+            -o ./dist/tingly-box-${{ matrix.suffix }}${{ matrix.exe }} \
+            ./cli/tingly-box
+
+          # Make binary executable for non-Windows
+          [ "${{ matrix.goos }}" != "windows" ] && chmod +x ./dist/tingly-box-${{ matrix.suffix }}${{ matrix.exe }} || true
+
+      - name: Upload build artifact (${{ matrix.suffix }})
+        uses: actions/upload-artifact@v4
+        with:
+          name: cli-${{ matrix.suffix }}
+          path: ./dist/tingly-box-${{ matrix.suffix }}${{ matrix.exe }}
+          retention-days: 7
+
+  github-release:
+    needs: [setup, build-cli]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout tingly-box-nightly repository
+        uses: actions/checkout@v4
+        with:
+          repository: tingly-dev/tingly-box-nightly
+          ref: main
+          fetch-depth: 0
+
+      - name: Configure Git
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Set release tag
+        run: |
+          echo "RELEASE_TAG=dev" >> $GITHUB_ENV
+
+      - name: Download CLI artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: cli-*
+          path: ./dist/cli
+          merge-multiple: true
+
+      - name: Package binaries with proper extensions
+        run: |
+          mkdir -p release
+
+          # Process CLI binaries
+          if [ -d "dist/cli" ]; then
+            cd dist/cli
+            chmod +x tingly-box-* || true
+
+            # Package all CLI binaries as zip
+            # Binary inside ZIP is named "tingly-box" (no platform suffix)
+            for binary in tingly-box-*; do
+              zip_name="../../release/${binary%.exe}.zip"
+
+              # Create temp dir with renamed binary
+              tmp_dir=$(mktemp -d)
+              if [[ "$binary" == *.exe ]]; then
+                cp "$binary" "$tmp_dir/tingly-box.exe"
+                (cd "$tmp_dir" && zip -q - tingly-box.exe) > "$zip_name"
+              else
+                cp "$binary" "$tmp_dir/tingly-box"
+                (cd "$tmp_dir" && zip -q - tingly-box) > "$zip_name"
+              fi
+              rm -rf "$tmp_dir"
+            done
+            cd ../..
+          fi
+
+          # Create checksums for all files
+          cd release
+          sha256sum *.zip > checksums.txt
+          cd ..
+
+      - name: Delete existing dev release if exists
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Delete existing dev release and tag
+          gh release delete dev --yes --repo tingly-dev/tingly-box-nightly 2>/dev/null || true
+          git push --delete origin dev 2>/dev/null || true
+
+      - name: Create git tag
+        run: |
+          git tag dev -f
+          git push origin dev -f
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: "dev"
+          files: |
+            release/*.zip
+            release/checksums.txt
+          generate_release_notes: true
+          draft: false
+          prerelease: true
+          body: |
+            ## Dev Build
+
+            Built from tingly-dev/tingly-box@${{ needs.setup.outputs.upstream_ref }} (commit: ${{ needs.setup.outputs.tingly_box_commit }})
+
+            This is a development build, updated on every run.
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  publish-npx:
+    needs: [setup, github-release]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+    env:
+      PKG_NAME: tingly-box-dev
+      PKG_DIR: build/npx/tingly-box-dev
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Configure Git
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Get current timestamp for version
+        id: version
+        run: |
+          # Generate version: 0.0.0-dev.YYYYMMDDHHMM
+          TIMESTAMP=$(date -u '+%Y%m%d%H%M')
+          VERSION="0.0.0-dev.${TIMESTAMP}"
+          echo "npx_version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Generated version: $VERSION"
+
+      - name: Update NPX package.json with new version
+        run: |
+          VERSION="${{ steps.version.outputs.npx_version }}"
+          cd $PKG_DIR
+          npm version "$VERSION" --no-git-tag-version
+          echo "Updated $PKG_NAME to version: $VERSION"
+
+      - name: Update bin.js to reference dev release
+        run: |
+          cd $PKG_DIR
+          sed -i.bak "s|const BINARY_RELEASE_BRANCH = .*|const BINARY_RELEASE_BRANCH = 'dev';|g" bin.js
+          echo "Updated bin.js content:"
+          head -20 bin.js
+          rm -f bin.js.bak
+
+      - name: Install dependencies
+        working-directory: ${{ env.PKG_DIR }}
+        run: npm ci
+
+      - name: Publish to npm
+        working-directory: ${{ env.PKG_DIR }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          VERSION="${{ steps.version.outputs.npx_version }}"
+          echo "📦 Publishing $PKG_NAME@${VERSION} to npm..."
+          npm publish --provenance --access public --tag dev
+
+      - name: Summary
+        run: |
+          echo "### ✅ Dev Build Published" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **NPX Package:** \`tingly-box-dev@${{ steps.version.outputs.npx_version }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Install:** \`npx tingly-box-dev@dev start\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Commit:** ${{ needs.setup.outputs.tingly_box_commit }}" >> $GITHUB_STEP_SUMMARY

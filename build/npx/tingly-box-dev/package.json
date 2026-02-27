@@ -1,0 +1,36 @@
+{
+  "name": "tingly-box-dev",
+  "version": "1.6.1",
+  "description": "High-performance AI gateway CLI - connect to multiple AI providers through a single API (Development builds)",
+  "keywords": [
+    "ai",
+    "gateway",
+    "openai",
+    "anthropic",
+    "claude",
+    "cli",
+    "tingly",
+    "dev"
+  ],
+  "homepage": "https://github.com/tingly-dev/tingly-box-nightly",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tingly-dev/tingly-box-nightly.git"
+  },
+  "license": "MPL-2.0",
+  "author": "Tingly Dev",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "bin": {
+    "tingly-box-dev": "bin.js"
+  },
+  "type": "module",
+  "dependencies": {
+    "undici": "^7.0.0",
+    "unzipper": "^0.12.3"
+  }
+}
