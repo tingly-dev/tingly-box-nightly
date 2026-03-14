@@ -75,8 +75,60 @@ jobs:
           echo "Debug: Set output release_tag=$VERSION"
           echo "Debug: GITHUB_OUTPUT file: $GITHUB_OUTPUT"
 
-  build-cli:
+  build-frontend:
     needs: setup
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout tingly-box source code
+        uses: actions/checkout@v4
+        with:
+          repository: tingly-dev/tingly-box
+          ref: ${{ needs.setup.outputs.upstream_ref }}
+          fetch-depth: 0
+          submodules: true
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Cache pnpm modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.pnpm-store
+            frontend/node_modules
+          key: ${{ runner.os }}-pnpm-${{ hashFiles('frontend/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-
+
+      - name: Install pnpm
+        run: npm install -g pnpm
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+        working-directory: ./frontend
+
+      - name: Install openapi-generator-cli
+        run: npm install -g @openapitools/openapi-generator-cli
+
+      - name: Build frontend
+        run: |
+          openapi-generator-cli generate -g typescript-axios -i ../swagger.json -o ./src/client
+          pnpm build && mkdir -p ../internal/web/dist && cp -R dist/* ../internal/web/dist/
+        working-directory: ./frontend
+
+      - name: Upload frontend artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: |
+            frontend/dist/
+            internal/web/dist/
+          retention-days: 1
+
+  build-cli:
+    needs: [setup, build-frontend]
     runs-on: ${{ matrix.runs-on }}
     strategy:
       matrix:
@@ -113,10 +165,11 @@ jobs:
           echo "RELEASE_TAG=${{ needs.setup.outputs.release_tag }}" >> $GITHUB_ENV
           echo "TAG_EXISTS=0" >> $GITHUB_ENV
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - name: Download frontend artifact
+        uses: actions/download-artifact@v4
         with:
-          node-version: ${{ env.NODE_VERSION }}
+          name: frontend-dist
+          path: ./
 
       - name: Setup Go
         uses: actions/setup-go@v5
@@ -133,34 +186,6 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-go-${{ matrix.goarch }}-
             ${{ runner.os }}-go-
-
-      - name: Cache pnpm modules
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.pnpm-store
-            frontend/node_modules
-          key: ${{ runner.os }}-pnpm-${{ matrix.goarch }}-${{ hashFiles('frontend/pnpm-lock.yaml') }}
-          restore-keys: |
-            ${{ runner.os }}-pnpm-${{ matrix.goarch }}-
-            ${{ runner.os }}-pnpm-
-
-      - name: Install pnpm
-        run: npm install -g pnpm
-
-      - name: Install frontend dependencies
-        run: pnpm install --frozen-lockfile
-        working-directory: ./frontend
-
-      - name: Install openapi-generator-cli
-        run: npm install -g @openapitools/openapi-generator-cli
-
-      - name: Run codegen Build frontend
-        shell: bash
-        run: |
-          openapi-generator-cli generate -g typescript-axios -i ../swagger.json -o ./src/client
-          pnpm build && mkdir -p ../internal/web/dist && cp -R dist/* ../internal/web/dist/
-        working-directory: ./frontend
 
       - name: Build Go binary (${{ matrix.suffix }})
         shell: bash
@@ -194,7 +219,7 @@ jobs:
           retention-days: 7
 
   build-gui:
-    needs: setup
+    needs: [setup, build-frontend]
     if: needs.setup.outputs.build_gui == 'true'
     runs-on: ${{ matrix.os }}
     strategy:
@@ -227,10 +252,11 @@ jobs:
           echo "RELEASE_TAG=${{ needs.setup.outputs.release_tag }}" >> $GITHUB_ENV
           echo "TAG_EXISTS=0" >> $GITHUB_ENV
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - name: Download frontend artifact
+        uses: actions/download-artifact@v4
         with:
-          node-version: ${{ env.NODE_VERSION }}
+          name: frontend-dist
+          path: ./
 
       - name: Setup Go
         uses: actions/setup-go@v5
@@ -248,38 +274,11 @@ jobs:
             ${{ runner.os }}-go-${{ matrix.goarch }}-
             ${{ runner.os }}-go-
 
-      - name: Cache pnpm modules
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.pnpm-store
-            frontend/node_modules
-          key: ${{ runner.os }}-pnpm-${{ matrix.goarch }}-${{ hashFiles('frontend/pnpm-lock.yaml') }}
-          restore-keys: |
-            ${{ runner.os }}-pnpm-${{ matrix.goarch }}-
-            ${{ runner.os }}-pnpm-
-
       - name: Install go-task
         run: go install github.com/go-task/task/v3/cmd/task@latest
 
       - name: Install wails3
         run: go install github.com/wailsapp/wails/v3/cmd/wails3@latest
-
-      - name: Install pnpm
-        run: npm install -g pnpm
-
-      - name: Install frontend dependencies
-        shell: bash
-        run: |
-          echo "@swc/core" | pnpm approve-builds
-          pnpm install --frozen-lockfile
-        working-directory: ./frontend
-
-      - name: Install openapi-generator-cli
-        run: npm install -g @openapitools/openapi-generator-cli
-
-      - name: Run codegen
-        run: task codegen
 
       - name: Install NSIS (Windows only)
         if: matrix.platform == 'windows'
@@ -324,7 +323,7 @@ jobs:
           retention-days: 7
 
   github-release:
-    needs: [setup, build-cli, build-gui]
+    needs: [setup, build-cli, build-gui, build-frontend]
     runs-on: ubuntu-latest
     if: |
       always() &&
