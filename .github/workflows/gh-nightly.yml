@@ -512,7 +512,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh workflow run gh-npx-publish.yml \
+          gh workflow run npx-nightly.yml \
             --repo tingly-dev/tingly-box-nightly \
             --ref main \
             -f upstream_ref="${{ needs.setup.outputs.upstream_ref }}" \
