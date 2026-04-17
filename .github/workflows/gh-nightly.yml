@@ -1,4 +1,5 @@
 name: Nightly Build and Release
+
 on:
   schedule:
     # Run daily at 00:00 UTC for nightly builds
@@ -15,10 +16,11 @@ on:
         required: false
         type: boolean
         default: false
-      
+
 env:
   GO_VERSION: '1.25'
-  NODE_VERSION: '20'
+  NODE_VERSION: '24'
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   setup:
@@ -57,7 +59,6 @@ jobs:
           # Get short commit hash
           COMMIT_HASH=$(git rev-parse --short=8 HEAD)
           echo "commit=$COMMIT_HASH" >> $GITHUB_OUTPUT
-          echo "Debug: COMMIT_HASH=$COMMIT_HASH"
 
           # Generate version: 0.YYYYMMDD.HHmm-nightly+<commit>
           NIGHTLY_DATE=$(date -u '+%Y%m%d')
@@ -72,8 +73,6 @@ jobs:
           } >> $GITHUB_OUTPUT
 
           echo "Generated version: $VERSION"
-          echo "Debug: Set output release_tag=$VERSION"
-          echo "Debug: GITHUB_OUTPUT file: $GITHUB_OUTPUT"
 
   build-frontend:
     needs: setup
@@ -103,18 +102,15 @@ jobs:
             ${{ runner.os }}-pnpm-
 
       - name: Install pnpm
-        run: npm install -g pnpm
+        run: corepack enable && corepack prepare pnpm@latest --activate
 
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
         working-directory: ./frontend
 
-      - name: Install openapi-generator-cli
-        run: npm install -g @openapitools/openapi-generator-cli
-
-      - name: Build frontend
+      - name: Run codegen and build frontend
         run: |
-          openapi-generator-cli generate -g typescript-axios -i ../swagger.json -o ./src/client
+          pnpm gen:api
           pnpm build && mkdir -p ../internal/web/dist && cp -R dist/* ../internal/web/dist/
         working-directory: ./frontend
 
@@ -122,10 +118,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: frontend-dist
-          path: |
-            frontend/dist/
-            internal/web/dist/
-          retention-days: 1
+          path: internal/web/dist/
+          retention-days: 7
 
   build-cli:
     needs: [setup, build-frontend]
@@ -137,10 +131,6 @@ jobs:
             goarch: amd64
             suffix: linux-amd64
             runs-on: ubuntu-latest
-        #   - goos: darwin
-        #     goarch: amd64
-        #     suffix: macos-amd64
-        #     runs-on: macos-15-intel
           - goos: darwin
             goarch: arm64
             suffix: macos-arm64
@@ -169,7 +159,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: frontend-dist
-          path: ./
+          path: internal/web/dist/
 
       - name: Setup Go
         uses: actions/setup-go@v5
@@ -200,22 +190,51 @@ jobs:
           GO_VERSION="$(go version | awk '{print $3}' | sed 's/go//' 2>/dev/null || echo 'unknown')"
           PLATFORM="${{ matrix.goos }}/${{ matrix.goarch }}"
 
-          # Build with ldflags
-          LDFLAGS="-s -w -X main.version=${VERSION} -X main.gitCommit=${GIT_COMMIT} -X main.buildTime=${BUILD_TIME} -X main.goVersion=${GO_VERSION} -X main.platform=${PLATFORM}"
+          # Build with optimized ldflags
+          LDFLAGS="-s -w"
+          LDFLAGS+=" -X main.version=${VERSION}"
+          LDFLAGS+=" -X main.gitCommit=${GIT_COMMIT}"
+          LDFLAGS+=" -X main.buildTime=${BUILD_TIME}"
+          LDFLAGS+=" -X main.goVersion=${GO_VERSION}"
+          LDFLAGS+=" -X main.platform=${PLATFORM}"
 
-          CGO_ENABLED=1 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build \
+          CGO_ENABLED=1 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} \
+            go build \
             -ldflags="${LDFLAGS}" \
-            -o ./dist/tingly-box-${{ matrix.suffix }}${{ matrix.exe }} \
+            -trimpath \
+            -o ./dist/tingly-box${{ matrix.exe }} \
             ./cli/tingly-box
 
           # Make binary executable for non-Windows
-          [ "${{ matrix.goos }}" != "windows" ] && chmod +x ./dist/tingly-box-${{ matrix.suffix }}${{ matrix.exe }} || true
+          [ "${{ matrix.goos }}" != "windows" ] && chmod +x ./dist/tingly-box${{ matrix.exe }} || true
+
+      - name: Install UPX 5.1.1
+        if: matrix.goos != 'darwin'
+        shell: bash
+        run: |
+          if [ "${{ runner.os }}" == "Windows" ]; then
+            choco install upx -y
+          else
+            wget -q https://github.com/upx/upx/releases/download/v5.1.1/upx-5.1.1-amd64_linux.tar.xz
+            tar -xf upx-5.1.1-amd64_linux.tar.xz
+          fi
+
+      - name: Compress binary with UPX
+        if: matrix.goos != 'darwin'
+        shell: bash
+        run: |
+          if command -v upx &> /dev/null || [ -f "./upx-5.1.1-amd64_linux/upx" ]; then
+            UPX_CMD="upx"
+            [ -f "./upx-5.1.1-amd64_linux/upx" ] && UPX_CMD="./upx-5.1.1-amd64_linux/upx"
+            $UPX_CMD --best --lzma ./dist/tingly-box${{ matrix.exe }} || \
+            $UPX_CMD --best ./dist/tingly-box${{ matrix.exe }}
+          fi
 
       - name: Upload build artifact (${{ matrix.suffix }})
         uses: actions/upload-artifact@v4
         with:
           name: cli-${{ matrix.suffix }}
-          path: ./dist/tingly-box-${{ matrix.suffix }}${{ matrix.exe }}
+          path: ./dist/tingly-box${{ matrix.exeexe }}
           retention-days: 7
 
   build-gui:
@@ -256,7 +275,12 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: frontend-dist
-          path: ./
+          path: internal/web/dist/
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
 
       - name: Setup Go
         uses: actions/setup-go@v5
@@ -274,11 +298,35 @@ jobs:
             ${{ runner.os }}-go-${{ matrix.goarch }}-
             ${{ runner.os }}-go-
 
+      - name: Cache pnpm modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.pnpm-store
+            frontend/node_modules
+          key: ${{ runner.os }}-pnpm-${{ matrix.goarch }}-${{ hashFiles('frontend/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-${{ matrix.goarch }}-
+            ${{ runner.os }}-pnpm-
+
       - name: Install go-task
         run: go install github.com/go-task/task/v3/cmd/task@latest
 
       - name: Install wails3
         run: go install github.com/wailsapp/wails/v3/cmd/wails3@latest
+
+      - name: Install pnpm
+        run: corepack enable && corepack prepare pnpm@latest --activate
+
+      - name: Install frontend dependencies
+        shell: bash
+        run: |
+          echo "@swc/core" | pnpm approve-builds
+          pnpm install --frozen-lockfile
+        working-directory: ./frontend
+
+      - name: Run codegen
+        run: task codegen
 
       - name: Install NSIS (Windows only)
         if: matrix.platform == 'windows'
@@ -323,11 +371,11 @@ jobs:
           retention-days: 7
 
   github-release:
-    needs: [setup, build-cli, build-gui, build-frontend]
+    needs: [setup, build-cli, build-gui]
     runs-on: ubuntu-latest
     if: |
       always() &&
-      github.event_name == 'workflow_dispatch' &&
+      (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') &&
       needs.build-cli.result == 'success' &&
       needs.setup.result == 'success' &&
       (needs.build-gui.result == 'success' || needs.build-gui.result == 'skipped')
@@ -349,25 +397,8 @@ jobs:
       - name: Set up tag environment
         run: |
           RELEASE_TAG="${{ needs.setup.outputs.release_tag }}"
-          echo "Debug: release_tag from setup = '$RELEASE_TAG'"
-          echo "Debug: all setup outputs:"
-          echo "  upstream_ref = '${{ needs.setup.outputs.upstream_ref }}'"
-          echo "  build_gui = '${{ needs.setup.outputs.build_gui }}'"
-          echo "  tingly_box_commit = '${{ needs.setup.outputs.tingly_box_commit }}'"
-
-          if [ -z "$RELEASE_TAG" ]; then
-            echo "Error: release_tag is empty!"
-            echo "Error: needs.setup.outputs.release_tag is empty or not set"
-            exit 1
-          fi
-
           echo "RELEASE_TAG=$RELEASE_TAG" >> $GITHUB_ENV
-          # Mark as prerelease for nightly builds
-          if [[ "$RELEASE_TAG" == *-nightly* ]]; then
-            echo "IS_PRERELEASE=true" >> $GITHUB_ENV
-          else
-            echo "IS_PRERELEASE=false" >> $GITHUB_ENV
-          fi
+          echo "IS_PRERELEASE=true" >> $GITHUB_ENV
           echo "Release tag: $RELEASE_TAG"
 
       - name: Create git tag for nightly release
@@ -387,63 +418,70 @@ jobs:
         with:
           pattern: cli-*
           path: ./dist/cli
-          merge-multiple: true
+          merge-multiple: false
 
       - name: Download GUI artifacts
+        if: needs.setup.outputs.build_gui == 'true'
         uses: actions/download-artifact@v4
         with:
           pattern: gui-*
           path: ./dist/gui
-          merge-multiple: true
+          merge-multiple: false
 
       - name: Package binaries with proper extensions
         run: |
-          mkdir -p release
+          # Save original directory and use absolute path for release
+          ORIGINAL_DIR="$(pwd)"
+          RELEASE_DIR="${ORIGINAL_DIR}/release"
+          mkdir -p "$RELEASE_DIR"
 
-          # Process CLI binaries
+          # Process CLI binaries - each artifact is in its own subdirectory
           if [ -d "dist/cli" ]; then
-            cd dist/cli
-            chmod +x tingly-box-* || true
+            for artifact_dir in dist/cli/cli-*; do
+              if [ -d "$artifact_dir" ]; then
+                # Extract platform from artifact directory name
+                platform=$(basename "$artifact_dir" | sed 's/cli-//')
+                chmod +x "$artifact_dir"/tingly-box* || true
 
-            # Package all CLI binaries as zip
-            # Binary inside ZIP is named "tingly-box" (no platform suffix)
-            for binary in tingly-box-*; do
-              zip_name="../../release/${binary%.exe}.zip"
-
-              # Create temp dir with renamed binary
-              tmp_dir=$(mktemp -d)
-              if [[ "$binary" == *.exe ]]; then
-                cp "$binary" "$tmp_dir/tingly-box.exe"
-                (cd "$tmp_dir" && zip -q - tingly-box.exe) > "$zip_name"
-              else
-                cp "$binary" "$tmp_dir/tingly-box"
-                (cd "$tmp_dir" && zip -q - tingly-box) > "$zip_name"
+                # Package the binary with platform suffix in zip filename
+                binary=$(ls "$artifact_dir"/tingly-box* 2>/dev/null | head -1)
+                if [ -n "$binary" ]; then
+                  # Create zip with binary named "tingly-box" inside
+                  tmp_dir=$(mktemp -d)
+                  if [[ "$binary" == *.exe ]]; then
+                    cp "$binary" "$tmp_dir/tingly-box.exe"
+                    (cd "$tmp_dir" && zip -q -r "$RELEASE_DIR/tingly-box-${platform}.zip" tingly-box.exe)
+                  else
+                    cp "$binary" "$tmp_dir/tingly-box"
+                    (cd "$tmp_dir" && zip -q -r "$RELEASE_DIR/tingly-box-${platform}.zip" tingly-box)
+                  fi
+                  rm -rf "$tmp_dir"
+                fi
               fi
-              rm -rf "$tmp_dir"
             done
-            cd ../..
           fi
 
           # Process GUI binaries (already zipped)
           if [ -d "dist/gui" ]; then
-            cp dist/gui/*/*.zip release/ 2>/dev/null || true
-            cp dist/gui/*.zip release/ 2>/dev/null || true
+            for artifact_dir in dist/gui/gui-*; do
+              if [ -d "$artifact_dir" ]; then
+                cp "$artifact_dir"/*.zip "$RELEASE_DIR/" 2>/dev/null || true
+              fi
+            done
+            find dist/gui -maxdepth 2 -name "*.zip" -exec cp {} "$RELEASE_DIR/" \; 2>/dev/null || true
           fi
 
-          # Create checksums for all files
-          cd release
-          sha256sum *.zip > checksums.txt 2>/dev/null || true
-          # Handle case where no zips exist
-          if [ ! -s checksums.txt ]; then
-            echo "No zip files found, skipping checksums.txt"
-            rm -f checksums.txt
+          # Create checksums for all files (only if we have zip files)
+          if ls "$RELEASE_DIR"/*.zip 1> /dev/null 2>&1; then
+            (cd "$RELEASE_DIR" && sha256sum *.zip > checksums.txt)
+          else
+            echo "No zip files found in release directory"
           fi
-          cd ..
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: "${{ needs.setup.outputs.release_tag }}"
+          tag_name: ${{ env.RELEASE_TAG }}
           files: |
             release/*.zip
             release/checksums.txt
@@ -483,5 +521,3 @@ jobs:
             -f publish_gui=false \
             -f publish_bundle=false
           echo "Triggered gh-npx-publish workflow"
-
-
