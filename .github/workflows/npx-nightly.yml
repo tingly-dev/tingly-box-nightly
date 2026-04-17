@@ -1,4 +1,4 @@
-name: NPX Package Publish from GitHub Release
+name: NPX Package Publish from GitHub Release Nightly
 
 on:
   workflow_dispatch:
