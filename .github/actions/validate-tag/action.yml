@@ -1,0 +1,43 @@
+name: 'Validate Release Tag'
+description: 'Validates and extracts version from a release tag'
+inputs:
+  release_tag:
+    description: 'Release tag to validate (e.g., v1.0.0 or 0.YYYYMMDD.HHmm-nightly+commit)'
+    required: true
+outputs:
+  tag:
+    description: 'Validated tag'
+    value: ${{ steps.validate.outputs.tag }}
+  npm_version:
+    description: 'Version for npm package'
+    value: ${{ steps.validate.outputs.npm_version }}
+  is_prerelease:
+    description: 'Whether this is a prerelease'
+    value: ${{ steps.validate.outputs.is_prerelease }}
+  is_nightly:
+    description: 'Whether this is a nightly build'
+    value: ${{ steps.validate.outputs.is_nightly }}
+runs:
+  using: 'composite'
+  steps:
+    - name: Validate and extract version
+      id: validate
+      shell: bash
+      run: |
+        INPUT_TAG="${{ inputs.release_tag }}"
+
+        # Validate tag format - support both semver and nightly formats
+        # Patterns: v1.0.0, v1.0.0-beta, 0.YYYYMMDD.HHmm-nightly, 0.YYYYMMDD.HHmm-nightly+<commit>
+        if [[ ! "$INPUT_TAG" =~ ^(v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9\.-]+)?(\+[a-zA-Z0-9\.-]+)?|0\.[0-9]{8}\.[0-9]{4}-nightly(\+[a-f0-9]+)?)$ ]]; then
+          echo "Error: Invalid tag format. Expected format: v1.0.0, v1.0.0-beta, or 0.20250119.1322-nightly+abc12345"
+          exit 1
+        fi
+
+        TAG="$INPUT_TAG"
+        NPM_VERSION="$INPUT_TAG"
+
+        echo "tag=$TAG" >> $GITHUB_OUTPUT
+        echo "npm_version=$NPM_VERSION" >> $GITHUB_OUTPUT
+        echo "is_prerelease=$([[ "$TAG" == *-* ]] && echo 'true' || echo 'false')" >> $GITHUB_OUTPUT
+        echo "is_nightly=$([[ "$TAG" == *-nightly* ]] && echo 'true' || echo 'false')" >> $GITHUB_OUTPUT
+        echo "Validated tag: $TAG (npm version: $NPM_VERSION)"
