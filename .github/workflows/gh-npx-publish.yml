@@ -135,11 +135,17 @@ jobs:
             pkg_dir: build/npx/tingly-box-nightly-bundle
     steps:
       - name: Checkout code
+        if: >-
+          (matrix.type == 'cli' && needs.setup.outputs.publish_cli == 'true') ||
+          (matrix.type == 'bundle' && needs.setup.outputs.publish_bundle == 'true')
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
       - name: Set up Node.js
+        if: >-
+          (matrix.type == 'cli' && needs.setup.outputs.publish_cli == 'true') ||
+          (matrix.type == 'bundle' && needs.setup.outputs.publish_bundle == 'true')
         uses: actions/setup-node@v4
         with:
           node-version: "20"
@@ -150,11 +156,17 @@ jobs:
             build/npx/*/package-lock.json
 
       - name: Configure Git
+        if: >-
+          (matrix.type == 'cli' && needs.setup.outputs.publish_cli == 'true') ||
+          (matrix.type == 'bundle' && needs.setup.outputs.publish_bundle == 'true')
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
 
       - name: Update NPX package.json with new version
+        if: >-
+          (matrix.type == 'cli' && needs.setup.outputs.publish_cli == 'true') ||
+          (matrix.type == 'bundle' && needs.setup.outputs.publish_bundle == 'true')
         run: |
           VERSION="${{ needs.setup.outputs.npx_version }}"
           cd ${{ matrix.pkg_dir }}
@@ -163,6 +175,9 @@ jobs:
           cd ..
 
       - name: Update bin.js to reference the correct release
+        if: >-
+          (matrix.type == 'cli' && needs.setup.outputs.publish_cli == 'true') ||
+          (matrix.type == 'bundle' && needs.setup.outputs.publish_bundle == 'true')
         run: |
           RELEASE_TAG="${{ needs.setup.outputs.release_tag }}"
           echo "Updating bin.js to reference release tag: $RELEASE_TAG"
@@ -192,7 +207,9 @@ jobs:
 
       # Bundle-only steps
       - name: Download release zip files
-        if: matrix.type == 'bundle'
+        if: >-
+          matrix.type == 'bundle' &&
+          needs.setup.outputs.publish_bundle == 'true'
         env:
           RELEASE_TAG: ${{ needs.setup.outputs.release_tag }}
           GH_TOKEN: ${{ github.token }}
@@ -216,7 +233,9 @@ jobs:
           ls -lh "${{ matrix.pkg_dir }}/zip/"
 
       - name: Verify bundle structure
-        if: matrix.type == 'bundle'
+        if: >-
+          matrix.type == 'bundle' &&
+          needs.setup.outputs.publish_bundle == 'true'
         run: |
           PKG_DIR="${{ matrix.pkg_dir }}"
           echo "🔍 Verifying bundle package structure..."
@@ -247,7 +266,9 @@ jobs:
           echo "✅ Bundle structure verified"
 
       - name: Calculate package size
-        if: matrix.type == 'bundle'
+        if: >-
+          matrix.type == 'bundle' &&
+          needs.setup.outputs.publish_bundle == 'true'
         run: |
           echo "📦 Package size information:"
           du -sh "${{ matrix.pkg_dir }}"
