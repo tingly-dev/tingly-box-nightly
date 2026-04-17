@@ -427,3 +427,141 @@ jobs:
           github_token: ${{ github.token }}
           build_args: |
             TINGLY_VERSION=${{ needs.setup.outputs.npx_version }}
+
+  # Publish GUI NPX package
+  publish-gui:
+    needs: setup
+    name: Publish GUI Package
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: write
+      id-token: write
+    if: needs.setup.outputs.publish_gui == 'true'
+    env:
+      PKG_NAME: tingly-box-gui-nightly
+      PKG_DIR: build/npx/tingly-box-gui-nightly
+      PKG_TYPE: gui
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+          cache: "npm"
+          cache-dependency-path: |
+            build/npx/tingly-box-gui-nightly/package-lock.json
+            build/npx/*/package-lock.json
+
+      - name: Configure Git
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Update NPX package.json with new version
+        run: |
+          VERSION="${{ needs.setup.outputs.npx_version }}"
+          cd $PKG_DIR
+          npm version "$VERSION" --no-git-tag-version
+          echo "Updated $PKG_NAME to version: $VERSION"
+          cd ..
+
+      - name: Update bin.js to reference the correct release
+        run: |
+          RELEASE_TAG="${{ needs.setup.outputs.release_tag }}"
+          echo "Updating bin.js to reference release tag: $RELEASE_TAG"
+          cd $PKG_DIR
+          sed -i.bak "s|const BINARY_RELEASE_BRANCH = .*|const BINARY_RELEASE_BRANCH = '$RELEASE_TAG';|g" bin.js
+          echo "Updated bin.js content:"
+          head -20 bin.js
+          rm -f bin.js.bak
+          cd ..
+
+      - name: Install dependencies
+        working-directory: ${{ env.PKG_DIR }}
+        run: npm ci
+
+      - name: Run tests
+        working-directory: ${{ env.PKG_DIR }}
+        run: |
+          if [ -f "package.json" ] && npm run | grep -q "test"; then
+            echo "🧪 Running tests..."
+            npm test
+          else
+            echo "⏭️ No tests found, skipping..."
+          fi
+
+      - name: Publish to npm
+        working-directory: ${{ env.PKG_DIR }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          VERSION="${{ needs.setup.outputs.npx_version }}"
+
+          echo "📦 Publishing $PKG_NAME@${VERSION} to npm..."
+
+          if npm view "$PKG_NAME@${VERSION}" version >/dev/null 2>&1; then
+            echo "ℹ️ $PKG_NAME@${VERSION} already exists on npm. Skipping publish."
+          else
+            npm publish --provenance --access public
+          fi
+
+      - name: Create NPX tag and release
+        env:
+          VERSION: ${{ needs.setup.outputs.npx_version }}
+          RELEASE_TAG: ${{ needs.setup.outputs.release_tag }}
+          PKG_TYPE: ${{ env.PKG_TYPE }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          FULL_TAG="npx-${PKG_TYPE}-$VERSION"
+
+          echo "Creating NPX tag and release for $FULL_TAG"
+
+          if git rev-parse "$FULL_TAG" >/dev/null 2>&1; then
+            echo "Tag $FULL_TAG already exists"
+          else
+            git tag "$FULL_TAG"
+            git push origin "$FULL_TAG"
+          fi
+
+          cat > npx_release_notes.md << EOF
+          ## 📦 NPX Package Release - $VERSION ($PKG_TYPE)
+
+          Based on GitHub Release: [${RELEASE_TAG}](https://github.com/tingly-dev/tingly-box-nightly/releases/tag/${RELEASE_TAG})
+
+          ### 🚀 Installation
+
+          \`\`\`bash
+          # Use with npx (recommended)
+          npx $PKG_NAME@$VERSION start
+
+          # Or install globally
+          npm install -g $PKG_NAME@$VERSION
+          \`\`\`
+
+          ### 🔗 Links
+          - 📦 [View on npm](https://www.npmjs.com/package/$PKG_NAME/v/$VERSION)
+          - 🏷️ [Source Release](https://github.com/tingly-dev/tingly-box-nightly/releases/tag/$RELEASE_TAG)
+
+          ---
+          _This NPX package was automatically published based on release $RELEASE_TAG_
+          EOF
+
+          if gh release view "$FULL_TAG" >/dev/null 2>&1; then
+            echo "Release $FULL_TAG already exists, updating..."
+            gh release edit "$FULL_TAG" --notes-file npx_release_notes.md --title "NPX Package $VERSION ($PKG_TYPE)"
+          else
+            PRERELEASE_FLAG=""
+            if [[ "$VERSION" == *-* ]]; then
+              PRERELEASE_FLAG="--prerelease"
+            fi
+            gh release create "$FULL_TAG" \
+              --title "NPX Package $VERSION ($PKG_TYPE)" \
+              --notes-file npx_release_notes.md \
+              ${PRERELEASE_FLAG}
+          fi

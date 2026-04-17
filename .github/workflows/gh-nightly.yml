@@ -234,7 +234,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: cli-${{ matrix.suffix }}
-          path: ./dist/tingly-box${{ matrix.exeexe }}
+          path: ./dist/tingly-box${{ matrix.exe }}
           retention-days: 7
 
   build-gui:
