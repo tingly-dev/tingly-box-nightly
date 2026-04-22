@@ -402,7 +402,7 @@ jobs:
           # Create or update GitHub release
           if gh release view "$FULL_TAG" >/dev/null 2>&1; then
             echo "Release $FULL_TAG already exists, updating..."
-            gh release edit "$FULL_TAG" --notes-file npx_release_notes.md --title "NPX Package $VERSION"
+            gh release edit "$FULL_TAG" --notes "$(cat npx_release_notes.md)" --title "NPX Package $VERSION"
           else
             PRERELEASE_FLAG=""
             if [[ "$VERSION" == *-* ]]; then
@@ -410,7 +410,7 @@ jobs:
             fi
             gh release create "$FULL_TAG" \
               --title "NPX Package $VERSION" \
-              --notes-file npx_release_notes.md \
+              --notes "$(cat npx_release_notes.md)" \
               ${PRERELEASE_FLAG}
           fi
 
@@ -567,7 +567,7 @@ jobs:
 
           if gh release view "$FULL_TAG" >/dev/null 2>&1; then
             echo "Release $FULL_TAG already exists, updating..."
-            gh release edit "$FULL_TAG" --notes-file npx_release_notes.md --title "NPX Package $VERSION ($PKG_TYPE)"
+            gh release edit "$FULL_TAG" --notes "$(cat npx_release_notes.md)" --title "NPX Package $VERSION ($PKG_TYPE)"
           else
             PRERELEASE_FLAG=""
             if [[ "$VERSION" == *-* ]]; then
@@ -575,6 +575,6 @@ jobs:
             fi
             gh release create "$FULL_TAG" \
               --title "NPX Package $VERSION ($PKG_TYPE)" \
-              --notes-file npx_release_notes.md \
+              --notes "$(cat npx_release_notes.md)" \
               ${PRERELEASE_FLAG}
           fi
