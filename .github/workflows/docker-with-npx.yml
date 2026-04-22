@@ -34,16 +34,25 @@ jobs:
       packages: write
 
     steps:
+      - name: Checkout tingly-box-nightly repository
+        uses: actions/checkout@v4
+        with:
+          repository: tingly-dev/tingly-box-nightly
+          ref: main
+          fetch-depth: 1
+
       - name: Checkout tingly-box source code
         uses: actions/checkout@v4
         with:
           repository: tingly-dev/tingly-box
           ref: ${{ github.event.inputs.upstream_ref || 'main' }}
           fetch-depth: 1
+          path: upstream-tingly-box
 
       - name: Get commit hash
         id: get_commit
         run: |
+          cd upstream-tingly-box
           COMMIT_HASH=$(git rev-parse --short=8 HEAD)
           echo "commit=$COMMIT_HASH" >> $GITHUB_OUTPUT
 

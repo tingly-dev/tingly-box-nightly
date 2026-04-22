@@ -37,6 +37,13 @@ jobs:
       tingly_box_commit: ${{ steps.get_commit.outputs.commit }}
       npm_version: ${{ steps.version.outputs.npm_version }}
     steps:
+      - name: Checkout tingly-box-nightly repository
+        uses: actions/checkout@v4
+        with:
+          repository: tingly-dev/tingly-box-nightly
+          ref: main
+          fetch-depth: 1
+
       - name: Set variables
         id: set_vars
         shell: bash
@@ -58,11 +65,13 @@ jobs:
           repository: tingly-dev/tingly-box
           ref: ${{ steps.set_vars.outputs.upstream_ref }}
           fetch-depth: 1
+          path: upstream-tingly-box
 
       - name: Get commit hash
         id: get_commit
         run: |
-          # Get short commit hash
+          # Get short commit hash from upstream repository
+          cd upstream-tingly-box
           COMMIT_HASH=$(git rev-parse --short=8 HEAD)
           echo "commit=$COMMIT_HASH" >> $GITHUB_OUTPUT
 
