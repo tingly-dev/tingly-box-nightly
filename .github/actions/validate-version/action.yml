@@ -1,0 +1,89 @@
+name: 'Validate and Extract Version'
+description: 'Validates release tag and npm version, extracts versions with proper handling of v prefix'
+inputs:
+  release_tag:
+    description: 'Release tag to validate (e.g., v1.0.0, v0.260423.0-rc, 0.20250119.1322-nightly+abc123)'
+    required: true
+  npm_version:
+    description: 'Optional NPM version (without v prefix). If not provided, derived from release_tag'
+    required: false
+    default: ''
+outputs:
+  release_tag:
+    description: 'Validated release tag (as provided)'
+    value: ${{ steps.validate.outputs.release_tag }}
+  npm_version:
+    description: 'NPM version (v prefix stripped if present in release_tag)'
+    value: ${{ steps.validate.outputs.npm_version }}
+  is_prerelease:
+    description: 'Whether this is a prerelease (contains hyphen)'
+    value: ${{ steps.validate.outputs.is_prerelease }}
+  is_nightly:
+    description: 'Whether this is a nightly build'
+    value: ${{ steps.validate.outputs.is_nightly }}
+runs:
+  using: 'composite'
+  steps:
+    - name: Validate and extract version
+      id: validate
+      shell: bash
+      run: |
+        RELEASE_TAG="${{ inputs.release_tag }}"
+        NPM_VERSION_INPUT="${{ inputs.npm_version }}"
+
+        # Validate release_tag format - support both semver and nightly formats
+        # Patterns: v1.0.0, v0.260423.0-rc, v1.0.0-beta, 0.YYYYMMDD.HHmm-nightly, 0.YYYYMMDD.HHmm-nightly+<commit>
+        if [[ ! "$RELEASE_TAG" =~ ^(v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9\.-]+)?(\+[a-zA-Z0-9\.-]+)?|0\.[0-9]{8}\.[0-9]{4}-nightly(\+[a-f0-9]+)?)$ ]]; then
+          echo "❌ Error: Invalid release_tag format '$RELEASE_TAG'"
+          echo "Expected formats:"
+          echo "  - v1.0.0, v0.260423.0-rc, v1.0.0-beta (with v prefix)"
+          echo "  - 0.20250119.1322-nightly+abc12345 (nightly format)"
+          exit 1
+        fi
+
+        # Determine npm version
+        if [ -n "$NPM_VERSION_INPUT" ]; then
+          # Validate npm_version format (should NOT have 'v' prefix)
+          if [[ ! "$NPM_VERSION_INPUT" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9\.-]+)?(\+[a-zA-Z0-9\.-]+)?$ ]]; then
+            echo "❌ Error: Invalid npm_version format '$NPM_VERSION_INPUT'"
+            echo "Expected semver format WITHOUT 'v' prefix (e.g., 1.0.0, 0.260423.0-rc)"
+            exit 1
+          fi
+          NPM_VERSION="$NPM_VERSION_INPUT"
+          echo "📝 Using custom NPM version: $NPM_VERSION"
+        else
+          # Strip 'v' prefix from release_tag for npm version
+          if [[ "$RELEASE_TAG" == v* ]]; then
+            NPM_VERSION="${RELEASE_TAG#v}"
+          else
+            NPM_VERSION="$RELEASE_TAG"
+          fi
+          echo "📝 Derived NPM version from release_tag: $NPM_VERSION"
+        fi
+
+        # Determine build type
+        IS_PRERELEASE="false"
+        IS_NIGHTLY="false"
+
+        if [[ "$RELEASE_TAG" == *-nightly* ]] || [[ "$NPM_VERSION" == *-nightly* ]]; then
+          IS_NIGHTLY="true"
+          IS_PRERELEASE="true"
+        elif [[ "$RELEASE_TAG" == *-* ]] || [[ "$NPM_VERSION" == *-* ]]; then
+          IS_PRERELEASE="true"
+        fi
+
+        # Set outputs
+        echo "release_tag=$RELEASE_TAG" >> $GITHUB_OUTPUT
+        echo "npm_version=$NPM_VERSION" >> $GITHUB_OUTPUT
+        echo "is_prerelease=$IS_PRERELEASE" >> $GITHUB_OUTPUT
+        echo "is_nightly=$IS_NIGHTLY" >> $GITHUB_OUTPUT
+
+        # Print summary
+        echo ""
+        echo "✅ Version Validation Summary"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "  Release Tag:  $RELEASE_TAG"
+        echo "  NPM Version:  $NPM_VERSION"
+        echo "  Prerelease:   $IS_PRERELEASE"
+        echo "  Nightly:      $IS_NIGHTLY"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

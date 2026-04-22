@@ -41,60 +41,44 @@ jobs:
           ref: ${{ github.event.inputs.upstream_ref || 'main' }}
           fetch-depth: 1
 
-      - name: Get commit hash and determine version
-        id: version
+      - name: Get commit hash
+        id: get_commit
+        run: |
+          COMMIT_HASH=$(git rev-parse --short=8 HEAD)
+          echo "commit=$COMMIT_HASH" >> $GITHUB_OUTPUT
+
+      - name: Determine release tag
+        id: determine_tag
         run: |
           if [ "${{ github.event_name }}" == "schedule" ]; then
-            # Scheduled nightly build - get commit hash and generate version
-            COMMIT_HASH=$(git rev-parse --short=8 HEAD)
+            # Scheduled nightly build - generate version
             NIGHTLY_DATE=$(date -u '+%Y%m%d')
             NIGHTLY_TIME=$(date -u '+%H%M')
-            TAG="0.${NIGHTLY_DATE}.${NIGHTLY_TIME}-nightly+${COMMIT_HASH}"
-            NPM_VERSION="$TAG"
-            echo "is_nightly=true" >> $GITHUB_OUTPUT
+            VERSION="0.${NIGHTLY_DATE}.${NIGHTLY_TIME}-nightly+${{ steps.get_commit.outputs.commit }}"
+            echo "release_tag=$VERSION" >> $GITHUB_OUTPUT
           elif [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
             # Use provided release_tag
-            TAG="${{ github.event.inputs.release_tag }}"
-
-            # Check if npm_version was provided
-            NPM_VERSION_INPUT="${{ github.event.inputs.npm_version }}"
-            if [ -n "$NPM_VERSION_INPUT" ]; then
-              # Validate semver format
-              if [[ ! "$NPM_VERSION_INPUT" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9\.-]+)?(\+[a-zA-Z0-9\.-]+)?$ ]]; then
-                echo "Error: Invalid npm_version format. Expected semver format (e.g., 1.0.0, 1.0.0-beta)"
-                exit 1
-              fi
-              NPM_VERSION="$NPM_VERSION_INPUT"
-              echo "📝 Using custom NPM version: $NPM_VERSION"
-            else
-              NPM_VERSION="$TAG"
-            fi
-
-            # Check if it's a nightly build
-            if [[ "$TAG" == *-nightly* ]]; then
-              echo "is_nightly=true" >> $GITHUB_OUTPUT
-            else
-              echo "is_nightly=false" >> $GITHUB_OUTPUT
-            fi
+            echo "release_tag=${{ github.event.inputs.release_tag }}" >> $GITHUB_OUTPUT
           else
             # Fallback - generate version with commit hash
-            COMMIT_HASH=$(git rev-parse --short=8 HEAD)
             NIGHTLY_DATE=$(date -u '+%Y%m%d')
             NIGHTLY_TIME=$(date -u '+%H%M')
-            TAG="0.${NIGHTLY_DATE}.${NIGHTLY_TIME}-nightly+${COMMIT_HASH}"
-            NPM_VERSION="$TAG"
-            echo "is_nightly=true" >> $GITHUB_OUTPUT
+            VERSION="0.${NIGHTLY_DATE}.${NIGHTLY_TIME}-nightly+${{ steps.get_commit.outputs.commit }}"
+            echo "release_tag=$VERSION" >> $GITHUB_OUTPUT
           fi
 
-          echo "tag=$TAG" >> $GITHUB_OUTPUT
-          echo "npm_version=$NPM_VERSION" >> $GITHUB_OUTPUT
-          echo "Building image for tag: $TAG (npm version: $NPM_VERSION)"
+      - name: Validate and extract version
+        id: version
+        uses: ./.github/actions/validate-version
+        with:
+          release_tag: ${{ steps.determine_tag.outputs.release_tag }}
+          npm_version: ${{ github.event.inputs.npm_version }}
 
       - name: Build and push Docker image
         uses: ./.github/actions/docker-build-push
         with:
           image_name: ${{ env.IMAGE_NAME }}
-          version: ${{ steps.version.outputs.tag }}
+          version: ${{ steps.version.outputs.release_tag }}
           github_token: ${{ github.token }}
           build_args: |
             TINGLY_VERSION=${{ steps.version.outputs.npm_version }}

@@ -56,7 +56,7 @@ jobs:
       publish_gui: ${{ steps.set_vars.outputs.publish_gui }}
       publish_bundle: ${{ steps.set_vars.outputs.publish_bundle }}
       build_docker: ${{ steps.set_vars.outputs.build_docker }}
-      npx_version: ${{ steps.version.outputs.npx_version }}
+      npx_version: ${{ steps.version.outputs.npm_version }}
       release_tag: ${{ steps.version.outputs.release_tag }}
       is_nightly: ${{ steps.version.outputs.is_nightly }}
     steps:
@@ -76,36 +76,10 @@ jobs:
 
       - name: Validate and extract version
         id: version
-        run: |
-          RELEASE_TAG="${{ github.event.inputs.release_tag }}"
-          NPM_VERSION_INPUT="${{ github.event.inputs.npm_version }}"
-
-          # Validate tag format - support both semver and nightly formats with optional build metadata
-          # Patterns: v1.0.0, v1.0.0-beta, 0.YYYYMMDD.HHmm-nightly, 0.YYYYMMDD.HHmm-nightly+<commit>
-          if [[ ! "$RELEASE_TAG" =~ ^(v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9\.-]+)?(\+[a-zA-Z0-9\.-]+)?|0\.[0-9]{8}\.[0-9]{4}-nightly(\+[a-f0-9]+)?)$ ]]; then
-            echo "Error: Invalid tag format. Expected format: v1.0.0, v1.0.0-beta, or 0.20250119.1322-nightly+abc12345"
-            exit 1
-          fi
-
-          # Validate and determine npm version
-          if [ -n "$NPM_VERSION_INPUT" ]; then
-            # Validate semver format for npm_version
-            if [[ ! "$NPM_VERSION_INPUT" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9\.-]+)?(\+[a-zA-Z0-9\.-]+)?$ ]]; then
-              echo "Error: Invalid npm_version format. Expected semver format (e.g., 1.0.0, 1.0.0-beta, 1.0.0+build)"
-              exit 1
-            fi
-            NPX_VERSION="$NPM_VERSION_INPUT"
-            echo "📝 Using custom NPM version: $NPX_VERSION"
-          else
-            # Use release_tag directly as npx_version (already in semver format)
-            NPX_VERSION="$RELEASE_TAG"
-            echo "📝 Using release_tag as NPM version: $NPX_VERSION"
-          fi
-
-          echo "release_tag=$RELEASE_TAG" >> $GITHUB_OUTPUT
-          echo "npx_version=$NPX_VERSION" >> $GITHUB_OUTPUT
-          echo "is_nightly=$([[ "$RELEASE_TAG" == *-nightly* ]] && echo 'true' || echo 'false')" >> $GITHUB_OUTPUT
-          echo "Release tag: $RELEASE_TAG, NPX version: $NPX_VERSION"
+        uses: ./.github/actions/validate-version
+        with:
+          release_tag: ${{ github.event.inputs.release_tag }}
+          npm_version: ${{ github.event.inputs.npm_version }}
 
       - name: Check if GitHub Release exists
         run: |

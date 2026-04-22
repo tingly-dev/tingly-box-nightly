@@ -33,9 +33,9 @@ jobs:
     outputs:
       upstream_ref: ${{ steps.set_vars.outputs.upstream_ref }}
       build_gui: ${{ steps.set_vars.outputs.build_gui }}
-      release_tag: ${{ steps.get_commit.outputs.release_tag }}
+      release_tag: ${{ steps.version.outputs.release_tag }}
       tingly_box_commit: ${{ steps.get_commit.outputs.commit }}
-      npm_version: ${{ steps.get_commit.outputs.npm_version }}
+      npm_version: ${{ steps.version.outputs.npm_version }}
     steps:
       - name: Set variables
         id: set_vars
@@ -59,42 +59,43 @@ jobs:
           ref: ${{ steps.set_vars.outputs.upstream_ref }}
           fetch-depth: 1
 
-      - name: Get commit hash and generate version
+      - name: Get commit hash
         id: get_commit
         run: |
           # Get short commit hash
           COMMIT_HASH=$(git rev-parse --short=8 HEAD)
           echo "commit=$COMMIT_HASH" >> $GITHUB_OUTPUT
 
+      - name: Determine release tag
+        id: determine_tag
+        run: |
           # Check if npm_version was provided
           NPM_VERSION_INPUT="${{ github.event.inputs.npm_version }}"
           if [ -n "$NPM_VERSION_INPUT" ]; then
-            # Validate semver format
-            if [[ ! "$NPM_VERSION_INPUT" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9\.-]+)?(\+[a-zA-Z0-9\.-]+)?$ ]]; then
-              echo "Error: Invalid npm_version format. Expected semver format (e.g., 1.0.0, 1.0.0-beta)"
-              exit 1
-            fi
-            NPX_VERSION="$NPM_VERSION_INPUT"
-            echo "📝 Using custom NPM version: $NPX_VERSION"
+            # Use npm_version as the base for release_tag
+            # Add 'v' prefix for release_tag consistency
+            RELEASE_TAG="v${NPM_VERSION_INPUT}"
           else
             # Generate version: 0.YYYYMMDD.HHmm-nightly+<commit>
             NIGHTLY_DATE=$(date -u '+%Y%m%d')
             NIGHTLY_TIME=$(date -u '+%H%M')
-            VERSION="0.${NIGHTLY_DATE}.${NIGHTLY_TIME}-nightly+${COMMIT_HASH}"
-            NPX_VERSION="$VERSION"
-            echo "📝 Generated nightly version: $NPX_VERSION"
+            VERSION="0.${NIGHTLY_DATE}.${NIGHTLY_TIME}-nightly+${{ steps.get_commit.outputs.commit }}"
+            RELEASE_TAG="$VERSION"
           fi
-
-          echo "npx_version=$NPX_VERSION" >> $GITHUB_OUTPUT
 
           # Use heredoc to safely set output with special characters
           {
             echo "release_tag<<EOF"
-            echo "$NPX_VERSION"
+            echo "$RELEASE_TAG"
             echo "EOF"
           } >> $GITHUB_OUTPUT
 
-          echo "Final version: $NPX_VERSION"
+      - name: Validate and extract version
+        id: version
+        uses: ./.github/actions/validate-version
+        with:
+          release_tag: ${{ steps.determine_tag.outputs.release_tag }}
+          npm_version: ${{ github.event.inputs.npm_version }}
 
   build-frontend:
     needs: setup
