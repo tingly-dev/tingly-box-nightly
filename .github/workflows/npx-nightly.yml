@@ -399,20 +399,15 @@ jobs:
           _NPX package automatically published based on release $RELEASE_TAG_
           FOOTER2_EOF
 
-          # Create or update GitHub release
-          if gh release view "$FULL_TAG" >/dev/null 2>&1; then
-            echo "Release $FULL_TAG already exists, updating..."
-            gh release edit "$FULL_TAG" --notes "$(cat npx_release_notes.md)" --title "NPX Package $VERSION"
-          else
-            PRERELEASE_FLAG=""
-            if [[ "$VERSION" == *-* ]]; then
-              PRERELEASE_FLAG="--prerelease"
-            fi
-            gh release create "$FULL_TAG" \
-              --title "NPX Package $VERSION" \
-              --notes "$(cat npx_release_notes.md)" \
-              ${PRERELEASE_FLAG}
-          fi
+      - name: Create NPX release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.FULL_TAG }}
+          body_path: npx_release_notes.md
+          draft: false
+          prerelease: ${{ contains(needs.setup.outputs.npx_version, '-') }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   # Build Docker NPX image after npm release is created
   build-docker-npx:
@@ -565,16 +560,12 @@ jobs:
           _This NPX package was automatically published based on release $RELEASE_TAG_
           EOF
 
-          if gh release view "$FULL_TAG" >/dev/null 2>&1; then
-            echo "Release $FULL_TAG already exists, updating..."
-            gh release edit "$FULL_TAG" --notes "$(cat npx_release_notes.md)" --title "NPX Package $VERSION ($PKG_TYPE)"
-          else
-            PRERELEASE_FLAG=""
-            if [[ "$VERSION" == *-* ]]; then
-              PRERELEASE_FLAG="--prerelease"
-            fi
-            gh release create "$FULL_TAG" \
-              --title "NPX Package $VERSION ($PKG_TYPE)" \
-              --notes "$(cat npx_release_notes.md)" \
-              ${PRERELEASE_FLAG}
-          fi
+      - name: Create NPX GUI release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.FULL_TAG }}
+          body_path: npx_release_notes.md
+          draft: false
+          prerelease: ${{ contains(needs.setup.outputs.npx_version, '-') }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

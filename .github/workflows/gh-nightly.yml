@@ -586,30 +586,7 @@ jobs:
           path: ./changelog
         continue-on-error: true
 
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ env.RELEASE_TAG }}
-          files: |
-            release/*.zip
-            release/checksums.txt
-          generate_release_notes: true
-          draft: false
-          prerelease: true
-          body: |
-            ## 🌙 Nightly Release
-
-            **Built from**: tingly-dev/tingly-box@${{ needs.setup.outputs.upstream_ref }} (commit: ${{ needs.setup.outputs.tingly_box_commit }})
-            **Version**: `${{ needs.setup.outputs.release_tag }}`
-
-            ### 📋 Upstream Changes
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Append changelog to release
-        if: needs.extract-changelog.outputs.changelog_exists == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Create release notes
         run: |
           RELEASE_TAG="${{ needs.setup.outputs.release_tag }}"
 
@@ -623,15 +600,15 @@ jobs:
             echo ""
             echo "### 📋 Upstream Changes"
             echo ""
-          } > release_notes_with_changelog.md
+          } > release_notes.md
 
           # Append upstream changelog if available
           if [ -f "changelog/upstream_changelog.md" ]; then
-            cat "changelog/upstream_changelog.md" >> release_notes_with_changelog.md
-            echo "" >> release_notes_with_changelog.md
+            cat "changelog/upstream_changelog.md" >> release_notes.md
+            echo "" >> release_notes.md
           else
-            echo "*No changelog available*" >> release_notes_with_changelog.md
-            echo "" >> release_notes_with_changelog.md
+            echo "*No changelog available*" >> release_notes.md
+            echo "" >> release_notes.md
           fi
 
           # Add installation instructions
@@ -649,11 +626,20 @@ jobs:
             echo "---"
             echo ""
             echo "_Automated nightly build from tingly-box-nightly_"
-          } >> release_notes_with_changelog.md
+          } >> release_notes.md
 
-          # Update release with enhanced notes
-          gh release update "$RELEASE_TAG" --notes "$(cat release_notes_with_changelog.md)"
-          echo "✅ Updated release notes with upstream changelog"
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          files: |
+            release/*.zip
+            release/checksums.txt
+          body_path: release_notes.md
+          draft: false
+          prerelease: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   trigger-npx-publish:
     needs: [setup, github-release]
