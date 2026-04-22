@@ -15,6 +15,11 @@ on:
         description: 'Release tag (auto-generated format: 0.YYYYMMDD.HHmm-nightly+commit)'
         required: true
         type: string
+      npm_version:
+        description: 'NPM version to use (optional, defaults to release_tag value)'
+        required: false
+        type: string
+        default: ''
 
 env:
   REGISTRY: ghcr.io
@@ -48,9 +53,23 @@ jobs:
             NPM_VERSION="$TAG"
             echo "is_nightly=true" >> $GITHUB_OUTPUT
           elif [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
-            # Use provided release_tag directly (already in new format)
+            # Use provided release_tag
             TAG="${{ github.event.inputs.release_tag }}"
-            NPM_VERSION="$TAG"
+
+            # Check if npm_version was provided
+            NPM_VERSION_INPUT="${{ github.event.inputs.npm_version }}"
+            if [ -n "$NPM_VERSION_INPUT" ]; then
+              # Validate semver format
+              if [[ ! "$NPM_VERSION_INPUT" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9\.-]+)?(\+[a-zA-Z0-9\.-]+)?$ ]]; then
+                echo "Error: Invalid npm_version format. Expected semver format (e.g., 1.0.0, 1.0.0-beta)"
+                exit 1
+              fi
+              NPM_VERSION="$NPM_VERSION_INPUT"
+              echo "📝 Using custom NPM version: $NPM_VERSION"
+            else
+              NPM_VERSION="$TAG"
+            fi
+
             # Check if it's a nightly build
             if [[ "$TAG" == *-nightly* ]]; then
               echo "is_nightly=true" >> $GITHUB_OUTPUT

@@ -55,10 +55,12 @@ runs:
         tags: |
           type=raw,value=${{ inputs.version }}
           type=raw,value=latest,enable=${{ inputs.version == 'latest' }}
+          type=raw,value=nightly,enable=${{ inputs.version == *-nightly* }}
         labels: |
           org.opencontainers.image.title=Tingly Box Nightly
           org.opencontainers.image.description=High-performance AI gateway CLI - Nightly builds
           org.opencontainers.image.source=https://github.com/tingly-dev/tingly-box-nightly
+          org.opencontainers.image.version=${{ inputs.version }}
 
     - name: Build and push Docker image
       id: build
@@ -92,7 +94,7 @@ runs:
         ```bash
         mkdir tingly-data
         docker run -d \
-          --name tingly-box \
+          --name tingly-box-nightly \
           -p 12580:12580 \
           -v `pwd`/tingly-data:/app/.tingly-box \
           ${{ inputs.registry }}/tingly-dev/${{ inputs.image_name }}:${{ inputs.version }}
