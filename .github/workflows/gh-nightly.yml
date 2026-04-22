@@ -11,6 +11,11 @@ on:
         required: false
         type: string
         default: 'main'
+      npm_version:
+        description: 'NPM version to publish (optional, defaults to auto-generated version)'
+        required: false
+        type: string
+        default: ''
       build_gui:
         description: 'Build GUI version'
         required: false
@@ -30,6 +35,7 @@ jobs:
       build_gui: ${{ steps.set_vars.outputs.build_gui }}
       release_tag: ${{ steps.get_commit.outputs.release_tag }}
       tingly_box_commit: ${{ steps.get_commit.outputs.commit }}
+      npm_version: ${{ steps.get_commit.outputs.npm_version }}
     steps:
       - name: Set variables
         id: set_vars
@@ -60,19 +66,35 @@ jobs:
           COMMIT_HASH=$(git rev-parse --short=8 HEAD)
           echo "commit=$COMMIT_HASH" >> $GITHUB_OUTPUT
 
-          # Generate version: 0.YYYYMMDD.HHmm-nightly+<commit>
-          NIGHTLY_DATE=$(date -u '+%Y%m%d')
-          NIGHTLY_TIME=$(date -u '+%H%M')
-          VERSION="0.${NIGHTLY_DATE}.${NIGHTLY_TIME}-nightly+${COMMIT_HASH}"
+          # Check if npm_version was provided
+          NPM_VERSION_INPUT="${{ github.event.inputs.npm_version }}"
+          if [ -n "$NPM_VERSION_INPUT" ]; then
+            # Validate semver format
+            if [[ ! "$NPM_VERSION_INPUT" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9\.-]+)?(\+[a-zA-Z0-9\.-]+)?$ ]]; then
+              echo "Error: Invalid npm_version format. Expected semver format (e.g., 1.0.0, 1.0.0-beta)"
+              exit 1
+            fi
+            NPX_VERSION="$NPM_VERSION_INPUT"
+            echo "📝 Using custom NPM version: $NPX_VERSION"
+          else
+            # Generate version: 0.YYYYMMDD.HHmm-nightly+<commit>
+            NIGHTLY_DATE=$(date -u '+%Y%m%d')
+            NIGHTLY_TIME=$(date -u '+%H%M')
+            VERSION="0.${NIGHTLY_DATE}.${NIGHTLY_TIME}-nightly+${COMMIT_HASH}"
+            NPX_VERSION="$VERSION"
+            echo "📝 Generated nightly version: $NPX_VERSION"
+          fi
+
+          echo "npx_version=$NPX_VERSION" >> $GITHUB_OUTPUT
 
           # Use heredoc to safely set output with special characters
           {
             echo "release_tag<<EOF"
-            echo "$VERSION"
+            echo "$NPX_VERSION"
             echo "EOF"
           } >> $GITHUB_OUTPUT
 
-          echo "Generated version: $VERSION"
+          echo "Final version: $NPX_VERSION"
 
   build-frontend:
     needs: setup
@@ -370,8 +392,77 @@ jobs:
           path: ./dist/
           retention-days: 7
 
+  extract-changelog:
+    needs: setup
+    runs-on: ubuntu-latest
+    outputs:
+      changelog_exists: ${{ steps.extract.outputs.changelog_exists }}
+    steps:
+      - name: Checkout upstream repository
+        uses: actions/checkout@v4
+        with:
+          repository: tingly-dev/tingly-box
+          ref: ${{ needs.setup.outputs.upstream_ref }}
+          fetch-depth: 0
+
+      - name: Extract changelog
+        id: extract
+        run: |
+          UPSTREAM_REF="${{ needs.setup.outputs.upstream_ref }}"
+          echo "Attempting to extract changelog for: $UPSTREAM_REF"
+
+          # Try to get release notes if it's a tag
+          if [[ "$UPSTREAM_REF" == v* ]]; then
+            if gh release view "$UPSTREAM_REF" --repo tingly-dev/tingly-box >/dev/null 2>&1; then
+              echo "📋 Found upstream release, extracting release notes..."
+              gh release view "$UPSTREAM_REF" --repo tingly-dev/tingly-box --json body -q '.body' > upstream_changelog.md
+              echo "changelog_exists=true" >> $GITHUB_OUTPUT
+              echo "✅ Extracted release notes from upstream tag"
+            else
+              echo "⚠️ Upstream release not found, will generate from commits"
+              echo "changelog_exists=false" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "ℹ️ Not a tag reference, will generate from commits"
+            echo "changelog_exists=false" >> $GITHUB_OUTPUT
+          fi
+
+          # If no release notes found, generate from commit history
+          if [ "${{ steps.extract.outputs.changelog_exists }}" != "true" ]; then
+            echo "📝 Generating changelog from commit history..."
+            {
+              echo "## Recent Changes"
+              echo ""
+              echo "### Commits in \`${UPSTREAM_REF}\`"
+              echo ""
+            } > upstream_changelog.md
+
+            # Get recent commits (last 20 for branches/commits, or since last tag)
+            PREV_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+            if [ -n "$PREV_TAG" ] && git rev-parse "$PREV_TAG" >/dev/null 2>&1; then
+              git log "${PREV_TAG}..${UPSTREAM_REF}" --pretty=format:"- %s (%h)" -20 >> upstream_changelog.md 2>/dev/null || \
+              git log "${UPSTREAM_REF}" --pretty=format:"- %s (%h)" -20 >> upstream_changelog.md
+            else
+              git log "${UPSTREAM_REF}" --pretty=format:"- %s (%h)" -20 >> upstream_changelog.md
+            fi
+            echo "changelog_exists=true" >> $GITHUB_OUTPUT
+          fi
+
+          # Display extracted changelog
+          echo "📋 Extracted Changelog:"
+          cat upstream_changelog.md
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload changelog artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: upstream-changelog
+          path: upstream_changelog.md
+          retention-days: 7
+
   github-release:
-    needs: [setup, build-cli, build-gui]
+    needs: [setup, build-cli, build-gui, extract-changelog]
     runs-on: ubuntu-latest
     if: |
       always() &&
@@ -478,6 +569,13 @@ jobs:
             echo "No zip files found in release directory"
           fi
 
+      - name: Download changelog artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: upstream-changelog
+          path: ./changelog
+        continue-on-error: true
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -489,13 +587,63 @@ jobs:
           draft: false
           prerelease: true
           body: |
-            ## Nightly Release
+            ## 🌙 Nightly Release
 
-            Built from tingly-dev/tingly-box@${{ needs.setup.outputs.upstream_ref }} (commit: ${{ needs.setup.outputs.tingly_box_commit }})
+            **Built from**: tingly-dev/tingly-box@${{ needs.setup.outputs.upstream_ref }} (commit: ${{ needs.setup.outputs.tingly_box_commit }})
+            **Version**: `${{ needs.setup.outputs.release_tag }}`
 
-            Version: "${{ needs.setup.outputs.release_tag }}"
+            ### 📋 Upstream Changes
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Append changelog to release
+        if: needs.extract-changelog.outputs.changelog_exists == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          RELEASE_TAG="${{ needs.setup.outputs.release_tag }}"
+
+          # Build release notes with changelog
+          {
+            echo "## 🌙 Nightly Release"
+            echo ""
+            echo "**Built from**: tingly-dev/tingly-box@${{ needs.setup.outputs.upstream_ref }} (commit: \`${{ needs.setup.outputs.tingly_box_commit }}\`)"
+            echo ""
+            echo "**Version**: \`$RELEASE_TAG\`"
+            echo ""
+            echo "### 📋 Upstream Changes"
+            echo ""
+          } > release_notes_with_changelog.md
+
+          # Append upstream changelog if available
+          if [ -f "changelog/upstream_changelog.md" ]; then
+            cat "changelog/upstream_changelog.md" >> release_notes_with_changelog.md
+            echo "" >> release_notes_with_changelog.md
+          else
+            echo "*No changelog available*" >> release_notes_with_changelog.md
+            echo "" >> release_notes_with_changelog.md
+          fi
+
+          # Add installation instructions
+          {
+            echo "### 🚀 Installation"
+            echo ""
+            echo '```bash'
+            echo "# Use NPX (recommended)"
+            echo "npx tingly-box-nightly@$RELEASE_TAG"
+            echo ""
+            echo "# Or install globally"
+            echo "npm install -g tingly-box-nightly@$RELEASE_TAG"
+            echo '```'
+            echo ""
+            echo "---"
+            echo ""
+            echo "_Automated nightly build from tingly-box-nightly_"
+          } >> release_notes_with_changelog.md
+
+          # Update release with enhanced notes
+          gh release update "$RELEASE_TAG" --notes-file release_notes_with_changelog.md
+          echo "✅ Updated release notes with upstream changelog"
 
   trigger-npx-publish:
     needs: [setup, github-release]
@@ -512,12 +660,20 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh workflow run npx-nightly.yml \
+          NPM_VERSION="${{ needs.setup.outputs.npm_version }}"
+          TRIGGER_CMD="gh workflow run npx-nightly.yml \
             --repo tingly-dev/tingly-box-nightly \
             --ref main \
-            -f upstream_ref="${{ needs.setup.outputs.upstream_ref }}" \
-            -f release_tag="${{ needs.setup.outputs.release_tag }}" \
+            -f upstream_ref=\"${{ needs.setup.outputs.upstream_ref }}\" \
+            -f release_tag=\"${{ needs.setup.outputs.release_tag }}\" \
             -f publish_cli=true \
             -f publish_gui=false \
-            -f publish_bundle=false
-          echo "Triggered gh-npx-publish workflow"
+            -f publish_bundle=false"
+
+          # Add npm_version if it was explicitly provided
+          if [ -n "$NPM_VERSION" ]; then
+            TRIGGER_CMD="$TRIGGER_CMD -f npm_version=\"$NPM_VERSION\""
+          fi
+
+          eval $TRIGGER_CMD
+          echo "✅ Triggered npx-nightly workflow"
