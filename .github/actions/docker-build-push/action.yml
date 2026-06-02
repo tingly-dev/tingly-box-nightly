@@ -55,7 +55,7 @@ runs:
         tags: |
           type=raw,value=${{ inputs.version }}
           type=raw,value=latest,enable=${{ inputs.version == 'latest' }}
-          type=raw,value=nightly,enable=${{ inputs.version == *-nightly* }}
+          type=raw,value=nightly,enable=${{ contains(inputs.version, '-nightly') }}
         labels: |
           org.opencontainers.image.title=Tingly Box Nightly
           org.opencontainers.image.description=High-performance AI gateway CLI - Nightly builds
